@@ -81,7 +81,7 @@ The table above is the index; the playbook below is the actual begin-to-end buil
    services:
      gateway:
        build: .
-       ports: ["8787:8787"]
+       ports: ["127.0.0.1:8787:8787"]
        env_file: .env
        environment: { DB_PATH: /data/promptgate.db }
        volumes: ["./data:/data"]

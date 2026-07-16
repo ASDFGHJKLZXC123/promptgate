@@ -1,0 +1,14 @@
+services:
+  gateway:
+    build: .
+    ports: ["127.0.0.1:8787:8787"]
+    env_file: .env
+    environment:
+      DB_PATH: /data/promptgate.db
+    volumes:
+      - ./data:/data
+    healthcheck:
+      # node:22-slim has no wget/curl — use node's own fetch
+      test: ["CMD", "node", "-e", "fetch('http://localhost:8787/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 5s
+      retries: 10

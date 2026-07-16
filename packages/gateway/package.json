@@ -2,8 +2,11 @@
 	"name": "@promptgate/gateway",
 	"version": "1.0.0",
 	"type": "module",
+	"files": [
+		"dist"
+	],
 	"scripts": {
-		"build": "rm -rf dist && tsc -p tsconfig.json --outDir dist --rootDir src && cp -R src/db/migrations dist/db/migrations",
+		"build": "rm -rf dist && tsc -p tsconfig.json --outDir dist --rootDir src && find dist -type f -name '*.test.js' -delete && cp -R src/db/migrations dist/db/migrations",
 		"dev": "tsx watch src/index.ts"
 	},
 	"dependencies": {
