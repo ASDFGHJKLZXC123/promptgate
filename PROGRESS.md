@@ -2,10 +2,10 @@
 
 > Maintained by the orchestrator (see `ORCHESTRATOR.md`). Updated after every step. Humans: the Position line is always the truth.
 
-**Position:** Phase 0, step 6 — not started
-**Last session:** 2026-07-15 — completed Phase 0 steps 1–5
-**Repo state at last update:** Native SQLite connection and idempotent `001_core.sql` migration runner verified with WAL and foreign keys enabled
-**Last commit:** phase-0 step-5 (this commit) · **Last green `pnpm lint && pnpm test`:** 2026-07-15 (0 test files, exit 0)
+**Position:** Phase 0, step 7 — blocked before implementation pending the Compose port-binding decision and local `.env` setup
+**Last session:** 2026-07-15 — completed Phase 0 steps 1–6
+**Repo state at last update:** Compiled Fastify gateway starts after migrations and serves `GET /healthz` with `{ "ok": true }`; injection and live-process checks passed
+**Last commit:** phase-0 step-6 (this commit) · **Last green `pnpm lint && pnpm test`:** 2026-07-15 (1 test file, 1 test passed)
 
 ## Phase status
 
@@ -13,7 +13,7 @@ Model/effort per ORCHESTRATOR.md → Model & effort assignment.
 
 | Phase | Name | Implementer | Status | Verify evidence | Approved by human |
 |---|---|---|---|---|---|
-| 0 | Scaffold | GPT-5.3-Codex-Spark / xhigh; Terra / medium for DB+Docker | in progress (step 6) | — | — |
+| 0 | Scaffold | GPT-5.3-Codex-Spark / xhigh; Terra / medium for DB+Docker | in progress (step 7) | — | — |
 | 1 | OpenAI passthrough | Claude Sonnet 5 / high; Spark+Luna support | not started | — | — |
 | 2 | Anthropic + streaming | Claude Opus 4.8 / xhigh; Luna fixtures | not started | — | — |
 | 3 | Cache, limits, budgets | GPT-5.6 Terra / high; Sol / xhigh budget audit | not started | — | — |
@@ -38,7 +38,9 @@ Status values: `not started` · `in progress (step K)` · `verify pending` · `a
 
 ## Blockers (current)
 
-- none — the 2026-07-15 external plan review raised 10 must-fix document issues; all were applied to the docs the same day (see Decision log). Remaining unknowns are the tracked `TODO(verify)`/`TODO(build-time)` items below, each blocking only its consuming phase.
+- Phase 0 step 7 has a document conflict: `BUILD_PLAYBOOK.md` specifies `ports: ["8787:8787"]`, while higher-authority `IMPLEMENTATION_GUIDE.md` §12 says single-host Compose publication stays on loopback as `127.0.0.1:8787:8787`. Human decision required before implementation.
+- Phase 0 step 7 local Docker verification requires the human to place a valid `ADMIN_TOKEN` (minimum 16 characters) in the gitignored `.env` file. `.env` is currently absent.
+- The 2026-07-15 external plan review raised 10 must-fix document issues; all were applied to the docs the same day (see Decision log). Remaining unknowns are the tracked `TODO(verify)`/`TODO(build-time)` items below, each blocking only its consuming phase.
 
 ## TODO(verify) resolutions
 
@@ -62,6 +64,7 @@ Small choices the spec didn't cover (architectural ones go to the human instead 
 
 | Date | Decision | Rationale |
 |---|---|---|
+| 2026-07-15 | Made gateway startup create the configured database parent, limited Vitest discovery to source tests, and made gateway builds clear stale `dist` output. | The default `./data/promptgate.db` must boot in a fresh workspace, and generated test copies or stale artifacts must not be executed or packaged as current output. |
 | 2026-07-15 | Allowlisted lifecycle scripts only for `better-sqlite3` and `esbuild`, and made the gateway build replace-copy SQL migrations into `dist`. | The native SQLite binding and TS runtime tooling must install in clean local/Docker environments, and compiled startup needs the numbered SQL assets without stale nested copies. |
 | 2026-07-15 | Scoped Node 22 types to the gateway package and enabled Biome's Git ignore integration. | Strict compilation needs the `process` type at the owning package boundary, while generated `dist/` files must stay outside lint input. |
 | 2026-07-15 | Added root TypeScript with Node 22 types and real `tsc` build scripts for all four package stubs. | The required root `pnpm build` command must compile strict TypeScript for Docker/CI instead of succeeding through no-op package scripts. |
@@ -77,4 +80,4 @@ Small choices the spec didn't cover (architectural ones go to the human instead 
 
 | Date | Covered | Ended at |
 |---|---|---|
-| 2026-07-15 | Phase 0 steps 1–5 — workspace scaffold through native SQLite core migrations | Phase 0, step 6 — not started |
+| 2026-07-15 | Phase 0 steps 1–6 — workspace scaffold through the migrated Fastify health server and its first real test | Phase 0, step 7 — blocked before implementation pending human input |
