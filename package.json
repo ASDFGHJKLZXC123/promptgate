@@ -1,0 +1,20 @@
+{
+	"name": "PromptGate",
+	"version": "1.0.0",
+	"description": "",
+	"main": "index.js",
+	"scripts": {
+		"dev": "pnpm --filter @promptgate/gateway dev",
+		"test": "vitest run",
+		"lint": "biome check .",
+		"build": "pnpm -r build"
+	},
+	"keywords": [],
+	"author": "",
+	"license": "ISC",
+	"packageManager": "pnpm@10.33.0",
+	"devDependencies": {
+		"@biomejs/biome": "^2.5.4",
+		"vitest": "^4.1.10"
+	}
+}
