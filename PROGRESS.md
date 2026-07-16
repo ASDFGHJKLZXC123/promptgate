@@ -2,10 +2,10 @@
 
 > Maintained by the orchestrator (see `ORCHESTRATOR.md`). Updated after every step. Humans: the Position line is always the truth.
 
-**Position:** Phase 0, step 2 — not started
-**Last session:** 2026-07-15 — completed Phase 0 step 1
-**Repo state at last update:** Git initialized in the existing PromptGate folder; root pnpm workspace bootstrapped
-**Last commit:** phase-0 step-1 (this commit) · **Last green `pnpm lint && pnpm test`:** 2026-07-15 (0 test files, exit 0)
+**Position:** Phase 0, step 3 — not started
+**Last session:** 2026-07-15 — completed Phase 0 steps 1–2
+**Repo state at last update:** Git/pnpm workspace initialized; strict shared TypeScript and default Biome configuration added
+**Last commit:** phase-0 step-2 (this commit) · **Last green `pnpm lint && pnpm test`:** 2026-07-15 (0 test files, exit 0)
 
 ## Phase status
 
@@ -13,7 +13,7 @@ Model/effort per ORCHESTRATOR.md → Model & effort assignment.
 
 | Phase | Name | Implementer | Status | Verify evidence | Approved by human |
 |---|---|---|---|---|---|
-| 0 | Scaffold | GPT-5.3-Codex-Spark / xhigh; Terra / medium for DB+Docker | in progress (step 2) | — | — |
+| 0 | Scaffold | GPT-5.3-Codex-Spark / xhigh; Terra / medium for DB+Docker | in progress (step 3) | — | — |
 | 1 | OpenAI passthrough | Claude Sonnet 5 / high; Spark+Luna support | not started | — | — |
 | 2 | Anthropic + streaming | Claude Opus 4.8 / xhigh; Luna fixtures | not started | — | — |
 | 3 | Cache, limits, budgets | GPT-5.6 Terra / high; Sol / xhigh budget audit | not started | — | — |
@@ -74,4 +74,4 @@ Small choices the spec didn't cover (architectural ones go to the human instead 
 
 | Date | Covered | Ended at |
 |---|---|---|
-| 2026-07-15 | Phase 0 step 1 — in-place Git and pnpm workspace bootstrap | Phase 0, step 2 — not started |
+| 2026-07-15 | Phase 0 steps 1–2 — in-place workspace bootstrap and shared TS/Biome configuration | Phase 0, step 3 — not started |
