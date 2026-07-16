@@ -2,10 +2,10 @@
 
 > Maintained by the orchestrator (see `ORCHESTRATOR.md`). Updated after every step. Humans: the Position line is always the truth.
 
-**Position:** Phase 0, step 8 — not started
-**Last session:** 2026-07-16 — completed Phase 0 steps 1–7
-**Repo state at last update:** Multi-stage Node 22 image and loopback-only Compose service verified healthy with native `better-sqlite3`, the compiled migration asset, and a persistent `/data` database mount
-**Last commit:** phase-0 step-7 (this commit) · **Last green `pnpm lint && pnpm test`:** 2026-07-16 (1 test file, 1 test passed)
+**Position:** Phase 0 — done and human-approved; Phase 1, step 1 — not started
+**Last session:** 2026-07-16 — human approved the completed Phase 0 gate; Phase 1 remains unstarted
+**Repo state at last update:** Literal Verify block, lint, test, build, native-module Docker integration, health HTTP 200, and SHA-pinned GitHub `ci` workflow all pass
+**Last commit:** phase-0 step-8 (this commit) · **Last green `pnpm lint && pnpm test`:** 2026-07-16 (1 test file, 1 test passed)
 
 ## Phase status
 
@@ -13,7 +13,7 @@ Model/effort per ORCHESTRATOR.md → Model & effort assignment.
 
 | Phase | Name | Implementer | Status | Verify evidence | Approved by human |
 |---|---|---|---|---|---|
-| 0 | Scaffold | GPT-5.3-Codex-Spark / xhigh; Terra / medium for DB+Docker | in progress (step 8) | — | — |
+| 0 | Scaffold | GPT-5.3-Codex-Spark / xhigh; Terra / medium for DB+Docker | done | `docs/evidence/phase-0.md` | project owner — 2026-07-16 |
 | 1 | OpenAI passthrough | Claude Sonnet 5 / high; Spark+Luna support | not started | — | — |
 | 2 | Anthropic + streaming | Claude Opus 4.8 / xhigh; Luna fixtures | not started | — | — |
 | 3 | Cache, limits, budgets | GPT-5.6 Terra / high; Sol / xhigh budget audit | not started | — | — |
@@ -38,8 +38,7 @@ Status values: `not started` · `in progress (step K)` · `verify pending` · `a
 
 ## Blockers (current)
 
-- Phase 0 step 8 can be implemented and checked locally, but no Git remote is configured; pushing and confirming a green GitHub Actions run will require the human to provide or configure the repository remote.
-- The 2026-07-15 external plan review raised 10 must-fix document issues; all were applied to the docs the same day (see Decision log). Remaining unknowns are the tracked `TODO(verify)`/`TODO(build-time)` items below, each blocking only its consuming phase.
+- none at the current position — later-phase `TODO(verify)`/`TODO(build-time)` items below block only their consuming phases.
 
 ## TODO(verify) resolutions
 
@@ -63,6 +62,7 @@ Small choices the spec didn't cover (architectural ones go to the human instead 
 
 | Date | Decision | Rationale |
 |---|---|---|
+| 2026-07-16 | Pinned official `actions/checkout@v6.0.3` and `actions/setup-node@v6.5.0` to their verified full commit SHAs, with read-only contents permission and no pnpm cache bootstrap. | Phase 0 CI needs an immutable, least-privilege toolchain on the supported Node 24 action runtime; omitting setup-node pnpm caching avoids requiring the pnpm executable before Corepack activates the repository-pinned version. |
 | 2026-07-16 | Applied the human-approved Fable 5 / high `proceed with adjustments` verdict by changing Phase 0 Compose publication to `127.0.0.1:8787:8787` and synchronizing the playbook. | The higher-authority security specification requires loopback for single-host use, and every documented local verify command remains compatible. |
 | 2026-07-16 | Deployed only the gateway production `dist` payload from a multi-stage build, retained native build tools only in the builder, and ignored persisted data plus local `.env` variants. | The runtime needs the native SQLite binding and migration assets without compilers, source/tests, database files, or editor-created secret backups entering commits or images. |
 | 2026-07-15 | Made gateway startup create the configured database parent, limited Vitest discovery to source tests, and made gateway builds clear stale `dist` output. | The default `./data/promptgate.db` must boot in a fresh workspace, and generated test copies or stale artifacts must not be executed or packaged as current output. |
@@ -81,5 +81,7 @@ Small choices the spec didn't cover (architectural ones go to the human instead 
 
 | Date | Covered | Ended at |
 |---|---|---|
+| 2026-07-16 | Phase 0 completion gate — human approval recorded after local, Docker, Terra, and GitHub Actions evidence passed | Phase 1, step 1 — not started |
+| 2026-07-16 | Phase 0 step 8 and completion verification — SHA-pinned workflow, actionlint, frozen install, lint/test/build, Docker health HTTP 200, and green remote `ci` run | Phase 0 completion gate — awaiting explicit human approval |
 | 2026-07-16 | Phase 0 step 7 — native-module multi-stage image, loopback-only Compose service, healthcheck, and approved playbook correction | Phase 0, step 8 — not started |
 | 2026-07-15 | Phase 0 steps 1–6 — workspace scaffold through the migrated Fastify health server and its first real test | Phase 0, step 7 — blocked before implementation pending human input |
