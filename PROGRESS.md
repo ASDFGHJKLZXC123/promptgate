@@ -2,10 +2,10 @@
 
 > Maintained by the orchestrator (see `ORCHESTRATOR.md`). Updated after every step. Humans: the Position line is always the truth.
 
-**Position:** Phase 0, step 5 — not started
-**Last session:** 2026-07-15 — completed Phase 0 steps 1–4
-**Repo state at last update:** Zod environment loader added; admin token required; provider keys optional; secret file ignored
-**Last commit:** phase-0 step-4 (this commit) · **Last green `pnpm lint && pnpm test`:** 2026-07-15 (0 test files, exit 0)
+**Position:** Phase 0, step 6 — not started
+**Last session:** 2026-07-15 — completed Phase 0 steps 1–5
+**Repo state at last update:** Native SQLite connection and idempotent `001_core.sql` migration runner verified with WAL and foreign keys enabled
+**Last commit:** phase-0 step-5 (this commit) · **Last green `pnpm lint && pnpm test`:** 2026-07-15 (0 test files, exit 0)
 
 ## Phase status
 
@@ -13,7 +13,7 @@ Model/effort per ORCHESTRATOR.md → Model & effort assignment.
 
 | Phase | Name | Implementer | Status | Verify evidence | Approved by human |
 |---|---|---|---|---|---|
-| 0 | Scaffold | GPT-5.3-Codex-Spark / xhigh; Terra / medium for DB+Docker | in progress (step 5) | — | — |
+| 0 | Scaffold | GPT-5.3-Codex-Spark / xhigh; Terra / medium for DB+Docker | in progress (step 6) | — | — |
 | 1 | OpenAI passthrough | Claude Sonnet 5 / high; Spark+Luna support | not started | — | — |
 | 2 | Anthropic + streaming | Claude Opus 4.8 / xhigh; Luna fixtures | not started | — | — |
 | 3 | Cache, limits, budgets | GPT-5.6 Terra / high; Sol / xhigh budget audit | not started | — | — |
@@ -62,6 +62,7 @@ Small choices the spec didn't cover (architectural ones go to the human instead 
 
 | Date | Decision | Rationale |
 |---|---|---|
+| 2026-07-15 | Allowlisted lifecycle scripts only for `better-sqlite3` and `esbuild`, and made the gateway build replace-copy SQL migrations into `dist`. | The native SQLite binding and TS runtime tooling must install in clean local/Docker environments, and compiled startup needs the numbered SQL assets without stale nested copies. |
 | 2026-07-15 | Scoped Node 22 types to the gateway package and enabled Biome's Git ignore integration. | Strict compilation needs the `process` type at the owning package boundary, while generated `dist/` files must stay outside lint input. |
 | 2026-07-15 | Added root TypeScript with Node 22 types and real `tsc` build scripts for all four package stubs. | The required root `pnpm build` command must compile strict TypeScript for Docker/CI instead of succeeding through no-op package scripts. |
 | 2026-07-15 | Installed root Biome/Vitest dev tooling in step 1 and configured Vitest `passWithNoTests` while the suite is empty. | The required `pnpm lint` and `pnpm test` pre-commit checks must be runnable from the first commit; this preserves step 6 as the first real test. |
@@ -76,4 +77,4 @@ Small choices the spec didn't cover (architectural ones go to the human instead 
 
 | Date | Covered | Ended at |
 |---|---|---|
-| 2026-07-15 | Phase 0 steps 1–4 — workspace scaffold through validated environment configuration | Phase 0, step 5 — not started |
+| 2026-07-15 | Phase 0 steps 1–5 — workspace scaffold through native SQLite core migrations | Phase 0, step 6 — not started |
