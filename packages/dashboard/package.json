@@ -1,0 +1,8 @@
+{
+	"name": "@promptgate/dashboard",
+	"version": "1.0.0",
+	"type": "module",
+	"scripts": {
+		"build": "tsc -p tsconfig.json --outDir dist --rootDir src"
+	}
+}
