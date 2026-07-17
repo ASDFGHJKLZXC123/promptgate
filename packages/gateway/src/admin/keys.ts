@@ -4,6 +4,7 @@ import type { FastifyInstance, FastifyReply } from "fastify";
 import { z } from "zod";
 
 import { config } from "../config.js";
+import { sendError } from "../errors.js";
 import {
 	type ApiKeyPatchInput,
 	type ApiKeyWithSpend,
@@ -41,14 +42,6 @@ const idParamsSchema = z.object({
 	id: z.coerce.number().int().positive(),
 });
 
-interface OpenAIErrorResponse {
-	error: {
-		message: string;
-		type: string;
-		code: string;
-	};
-}
-
 interface ListApiKeyResponse {
 	id: number;
 	name: string;
@@ -61,30 +54,6 @@ interface ListApiKeyResponse {
 
 interface CreateApiKeyResponse {
 	plaintext_key: string;
-}
-
-function openAIError(
-	message: string,
-	code: string,
-	type = "invalid_request_error",
-): OpenAIErrorResponse {
-	return {
-		error: {
-			message,
-			type,
-			code,
-		},
-	};
-}
-
-function sendError(
-	reply: FastifyReply,
-	statusCode: number,
-	message: string,
-	code: string,
-	type = "invalid_request_error",
-): FastifyReply {
-	return reply.code(statusCode).send(openAIError(message, code, type));
 }
 
 function parseOrReply<T>(

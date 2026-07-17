@@ -2,10 +2,10 @@
 
 > Maintained by the orchestrator (see `ORCHESTRATOR.md`). Updated after every step. Humans: the Position line is always the truth.
 
-**Position:** Phase 0 — done and human-approved; Phase 1, step 4 — not started
-**Last session:** 2026-07-16 — completed Phase 1 step 3 admin API-key management with scoped timing-safe admin auth and exact Claude Sonnet 5 / high approval
-**Repo state at last update:** Admin key create/list/patch routes use strict Zod boundaries and DAO-only SQL; plaintext keys are returned once, only SHA-256 hashes persist, and month-to-date spend is listed without secret leakage
-**Last commit:** phase-1 step-3 (this commit) · **Last green `pnpm lint && pnpm test`:** 2026-07-16 (6 test files, 48 tests passed)
+**Position:** Phase 0 — done and human-approved; Phase 1, step 5 — not started
+**Last session:** 2026-07-16 — completed Phase 1 step 4 client API-key authentication and the shared OpenAI error formatter under Claude Sonnet 5 / high ownership
+**Repo state at last update:** The encapsulated `/v1` seam rejects missing, malformed, unknown, and disabled Bearer keys with `invalid_pg_key`; valid keys attach only safe metadata to typed `request.ctx`
+**Last commit:** phase-1 step-4 (this commit) · **Last green `pnpm lint && pnpm test`:** 2026-07-16 (7 test files, 53 tests passed)
 
 ## Phase status
 
@@ -14,7 +14,7 @@ Model/effort per ORCHESTRATOR.md → Model & effort assignment.
 | Phase | Name | Implementer | Status | Verify evidence | Approved by human |
 |---|---|---|---|---|---|
 | 0 | Scaffold | GPT-5.3-Codex-Spark / xhigh; Terra / medium for DB+Docker | done | `docs/evidence/phase-0.md` | project owner — 2026-07-16 |
-| 1 | OpenAI passthrough | Claude Sonnet 5 / high; Spark+Luna support | in progress (step 4) | — | — |
+| 1 | OpenAI passthrough | Claude Sonnet 5 / high; Spark+Luna support | in progress (step 5) | — | — |
 | 2 | Anthropic + streaming | Claude Opus 4.8 / xhigh; Luna fixtures | not started | — | — |
 | 3 | Cache, limits, budgets | GPT-5.6 Terra / high; Sol / xhigh budget audit | not started | — | — |
 | 4 | Prompt registry | GPT-5.6 Terra / high; Spark support | not started | — | — |
@@ -62,6 +62,7 @@ Small choices the spec didn't cover (architectural ones go to the human instead 
 
 | Date | Decision | Rationale |
 |---|---|---|
+| 2026-07-16 | Installed client authentication through an encapsulated `/v1` Fastify plugin, attached a typed context containing only active-key metadata, and centralized all gateway error envelopes in `src/errors.ts`. | The plugin seam ensures future `/v1` handlers inherit auth without URL-condition middleware, while a safe context and one formatter prevent stored hashes or inconsistent error shapes from leaking downstream. Claude Sonnet 5 / high owned and self-reviewed the implementation. |
 | 2026-07-16 | Scoped admin authentication and OpenAI-envelope error handling through the Fastify `/admin` plugin, returned only `{plaintext_key}` from create, listed non-secret metadata plus month-to-date spend, and returned non-secret metadata from patch. | Prefix encapsulation keeps admin policy off `/healthz`; the response shapes fulfill §5.2 while ensuring plaintext and stored hashes never appear after creation. Claude Sonnet 5 / high independently reviewed the completed auth/key path and returned `APPROVE` with no required corrections. |
 | 2026-07-16 | Seeded only `gpt-5.6-luna`, locked judge `gpt-5.6-terra`, and `claude-sonnet-5`, with a future date-effective Sonnet 5 row for the published post-promotion price. | The human explicitly approved the current official-source proposal; limiting the table to routed models preserves the unknown-model guard and date-effective metering semantics. |
 | 2026-07-16 | Made shared OpenAI wire schemas validate only fields PromptGate touches while preserving unknown provider fields with Zod loose objects; included the current `developer` role and official reasoning-effort values. | The gateway is a compatibility boundary: malformed fields it consumes must fail early, while untouched fields must survive OpenAI passthrough and future API additions. |
@@ -84,6 +85,7 @@ Small choices the spec didn't cover (architectural ones go to the human instead 
 
 | Date | Covered | Ended at |
 |---|---|---|
+| 2026-07-16 | Phase 1 step 4 — shared OpenAI error formatter, DAO-backed Bearer-key lookup, disabled/invalid-key rejection, typed safe request context, protected `/v1` plugin seam, and 5 focused auth tests under Claude Sonnet 5 / high ownership | Phase 1, step 5 — not started |
 | 2026-07-16 | Phase 1 step 3 — DAO-backed admin key create/list/patch endpoints, one-time `pg-` plaintext issuance with SHA-256-only storage, scoped timing-safe admin auth, MTD spend, strict validation/errors, 9 focused tests, and Claude Sonnet 5 / high `APPROVE` | Phase 1, step 4 — not started |
 | 2026-07-16 | Phase 1 step 2 — human-approved, Zod-validated provider pricing JSON plus transactional, idempotent source/compiled SQLite seed runners and focused tests | Phase 1, step 3 — not started |
 | 2026-07-16 | Phase 1 step 1 — shared Zod OpenAI-compatible wire schemas, inferred strict types, passthrough compatibility, and 34 focused schema tests; exact Claude Sonnet 5 / high review found no required edits | Phase 1, step 2 — blocked pending human pricing/model confirmation |
