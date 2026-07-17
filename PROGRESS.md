@@ -2,10 +2,10 @@
 
 > Maintained by the orchestrator (see `ORCHESTRATOR.md`). Updated after every step. Humans: the Position line is always the truth.
 
-**Position:** Phase 0 — done and human-approved; Phase 1, step 1 — not started
-**Last session:** 2026-07-16 — human approved the completed Phase 0 gate; Phase 1 remains unstarted
-**Repo state at last update:** Literal Verify block, lint, test, build, native-module Docker integration, health HTTP 200, and SHA-pinned GitHub `ci` workflow all pass
-**Last commit:** phase-0 step-8 (this commit) · **Last green `pnpm lint && pnpm test`:** 2026-07-16 (1 test file, 1 test passed)
+**Position:** Phase 0 — done and human-approved; Phase 1, step 2 — blocked pending human confirmation of the current provider pricing/model seed proposal
+**Last session:** 2026-07-16 — completed Phase 1 step 1 shared OpenAI wire schemas and tests; stopped before step 2's pricing seed as required
+**Repo state at last update:** Shared strict TypeScript/Zod request, response, message, usage, choice, and `pg_*` schemas pass focused tests, full lint/test, and build
+**Last commit:** phase-1 step-1 (this commit) · **Last green `pnpm lint && pnpm test`:** 2026-07-16 (5 test files, 35 tests passed)
 
 ## Phase status
 
@@ -14,7 +14,7 @@ Model/effort per ORCHESTRATOR.md → Model & effort assignment.
 | Phase | Name | Implementer | Status | Verify evidence | Approved by human |
 |---|---|---|---|---|---|
 | 0 | Scaffold | GPT-5.3-Codex-Spark / xhigh; Terra / medium for DB+Docker | done | `docs/evidence/phase-0.md` | project owner — 2026-07-16 |
-| 1 | OpenAI passthrough | Claude Sonnet 5 / high; Spark+Luna support | not started | — | — |
+| 1 | OpenAI passthrough | Claude Sonnet 5 / high; Spark+Luna support | in progress (step 2) | — | — |
 | 2 | Anthropic + streaming | Claude Opus 4.8 / xhigh; Luna fixtures | not started | — | — |
 | 3 | Cache, limits, budgets | GPT-5.6 Terra / high; Sol / xhigh budget audit | not started | — | — |
 | 4 | Prompt registry | GPT-5.6 Terra / high; Spark support | not started | — | — |
@@ -38,7 +38,7 @@ Status values: `not started` · `in progress (step K)` · `verify pending` · `a
 
 ## Blockers (current)
 
-- none at the current position — later-phase `TODO(verify)`/`TODO(build-time)` items below block only their consuming phases.
+- Phase 1 step 2 is blocked until the human confirms the current official provider model/pricing proposal required by ORCHESTRATOR.md; no pricing seed has been created.
 
 ## TODO(verify) resolutions
 
@@ -54,7 +54,7 @@ Status values: `not started` · `in progress (step K)` · `verify pending` · `a
 | Item | Resolution | Date |
 |---|---|---|
 | Pinned cheap eval models (one per provider) | unresolved | — |
-| `pricing.json` seeded from current provider pricing | unresolved | — |
+| `pricing.json` seeded from current provider pricing | official-source proposal pending explicit human confirmation before Phase 1 step 2 | 2026-07-16 |
 
 ## Decision log
 
@@ -62,6 +62,7 @@ Small choices the spec didn't cover (architectural ones go to the human instead 
 
 | Date | Decision | Rationale |
 |---|---|---|
+| 2026-07-16 | Made shared OpenAI wire schemas validate only fields PromptGate touches while preserving unknown provider fields with Zod loose objects; included the current `developer` role and official reasoning-effort values. | The gateway is a compatibility boundary: malformed fields it consumes must fail early, while untouched fields must survive OpenAI passthrough and future API additions. |
 | 2026-07-16 | Pinned official `actions/checkout@v6.0.3` and `actions/setup-node@v6.5.0` to their verified full commit SHAs, with read-only contents permission and no pnpm cache bootstrap. | Phase 0 CI needs an immutable, least-privilege toolchain on the supported Node 24 action runtime; omitting setup-node pnpm caching avoids requiring the pnpm executable before Corepack activates the repository-pinned version. |
 | 2026-07-16 | Applied the human-approved Fable 5 / high `proceed with adjustments` verdict by changing Phase 0 Compose publication to `127.0.0.1:8787:8787` and synchronizing the playbook. | The higher-authority security specification requires loopback for single-host use, and every documented local verify command remains compatible. |
 | 2026-07-16 | Deployed only the gateway production `dist` payload from a multi-stage build, retained native build tools only in the builder, and ignored persisted data plus local `.env` variants. | The runtime needs the native SQLite binding and migration assets without compilers, source/tests, database files, or editor-created secret backups entering commits or images. |
@@ -81,6 +82,7 @@ Small choices the spec didn't cover (architectural ones go to the human instead 
 
 | Date | Covered | Ended at |
 |---|---|---|
+| 2026-07-16 | Phase 1 step 1 — shared Zod OpenAI-compatible wire schemas, inferred strict types, passthrough compatibility, and 34 focused schema tests; exact Claude Sonnet 5 / high review found no required edits | Phase 1, step 2 — blocked pending human pricing/model confirmation |
 | 2026-07-16 | Phase 0 completion gate — human approval recorded after local, Docker, Terra, and GitHub Actions evidence passed | Phase 1, step 1 — not started |
 | 2026-07-16 | Phase 0 step 8 and completion verification — SHA-pinned workflow, actionlint, frozen install, lint/test/build, Docker health HTTP 200, and green remote `ci` run | Phase 0 completion gate — awaiting explicit human approval |
 | 2026-07-16 | Phase 0 step 7 — native-module multi-stage image, loopback-only Compose service, healthcheck, and approved playbook correction | Phase 0, step 8 — not started |

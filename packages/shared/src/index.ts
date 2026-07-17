@@ -1,1 +1,1 @@
-export {};
+export * from "./wire/index.js";
