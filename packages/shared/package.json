@@ -2,8 +2,20 @@
 	"name": "@promptgate/shared",
 	"version": "1.0.0",
 	"type": "module",
+	"files": [
+		"dist"
+	],
+	"main": "./dist/index.js",
+	"types": "./dist/index.d.ts",
+	"exports": {
+		".": {
+			"types": "./dist/index.d.ts",
+			"development": "./src/index.ts",
+			"default": "./dist/index.js"
+		}
+	},
 	"scripts": {
-		"build": "rm -rf dist && tsc -p tsconfig.json --outDir dist --rootDir src && find dist -type f -name '*.test.js' -delete"
+		"build": "rm -rf dist && tsc -p tsconfig.json --outDir dist --rootDir src && find dist -type f -name '*.test.js' -delete && find dist -type f -name '*.test.d.ts' -delete"
 	},
 	"dependencies": {
 		"zod": "^4.4.3"

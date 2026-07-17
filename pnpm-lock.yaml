@@ -27,6 +27,9 @@ importers:
 
   packages/gateway:
     dependencies:
+      '@promptgate/shared':
+        specifier: workspace:*
+        version: link:../shared
       better-sqlite3:
         specifier: ^12.11.1
         version: 12.11.1

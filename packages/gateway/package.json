@@ -12,6 +12,7 @@
 		"dev": "tsx watch src/index.ts"
 	},
 	"dependencies": {
+		"@promptgate/shared": "workspace:*",
 		"better-sqlite3": "^12.11.1",
 		"fastify": "^5.10.0",
 		"zod": "^4.4.3"
