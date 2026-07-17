@@ -2,6 +2,7 @@ import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import fastify, { type FastifyInstance } from "fastify";
 
+import { registerAdminRoutes } from "./admin/keys.js";
 import { config } from "./config.js";
 import { openDatabase } from "./db/index.js";
 import { migrate } from "./db/migrate.js";
@@ -20,6 +21,13 @@ export function buildServer(): FastifyInstance {
 	server.get("/healthz", () => ({
 		ok: true,
 	}));
+
+	server.register(
+		(adminServer) => {
+			registerAdminRoutes(adminServer, db);
+		},
+		{ prefix: "/admin" },
+	);
 
 	server.addHook("onClose", async () => {
 		db.close();
