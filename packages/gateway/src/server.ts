@@ -11,6 +11,7 @@ import {
 	type ProviderAdapterRegistry,
 	registerChatCompletionsRoute,
 } from "./pipeline/handler.js";
+import { registerModelsRoute } from "./pipeline/models.js";
 import { createOpenAiAdapter } from "./providers/openai.js";
 
 export interface BuildServerOptions {
@@ -57,6 +58,7 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
 		(v1Server) => {
 			registerClientAuth(v1Server, db);
 			registerChatCompletionsRoute(v1Server, db, adapters);
+			registerModelsRoute(v1Server, db);
 		},
 		{ prefix: "/v1" },
 	);
