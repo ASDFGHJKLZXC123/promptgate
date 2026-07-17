@@ -127,12 +127,12 @@ Build order matters here: types → pricing → keys → auth → adapter → ro
 
 6. **OpenAI adapter (non-streaming).** `src/providers/openai.ts`: `fetch` to `https://api.openai.com/v1/chat/completions`, swap auth header, forward body **minus all `pg_*` fields** (strip via one shared `stripPgFields()` — used by cache-keying later too). Wrap in the retry helper (2 retries on 429/5xx, jittered 250ms/1s).
 
-7. **The route.** `POST /v1/chat/completions` in `src/pipeline/handler.ts` — the pipeline is an explicit function chain, not middleware magic:
+7. **Migration 002 + the route.** Copy `002_request_identity.sql` in first (§4): `ALTER TABLE requests ADD COLUMN request_id TEXT` plus a partial unique index (`WHERE request_id IS NOT NULL`) — nullable at the schema level for legacy-row compatibility, but the pipeline DAO must reject an absent/non-UUID `request_id` before any SQL runs, so every gateway-created row still gets one. `POST /v1/chat/completions` in `src/pipeline/handler.ts` — the pipeline is an explicit function chain, not middleware magic:
    ```ts
    // auth (hook) → validate body → resolveProvider → [cache: phase 3] → adapter.complete
    //   → meter(usage) → reply … then logRequest(ctx) in reply's onSend/after
    ```
-   Metering (integer micro-USD, §3.5): `cost_micro_usd = Math.round(usage.prompt_tokens * in_micro_rate / 1e6) + Math.round(usage.completion_tokens * out_micro_rate / 1e6)` with rates from the date-effective pricing lookup (`WHERE model = ? AND effective_from <= date('now') ORDER BY effective_from DESC LIMIT 1`). Insert the `requests` row after the response is sent (Fastify `onResponse` hook) so logging never adds latency. Set response headers `x-pg-request-id`, `x-pg-cache: miss`, and `x-pg-cost-usd` (non-streaming only, §5.1).
+   Generate `crypto.randomUUID()` exactly once, at pipeline entry — that same value is both the `x-pg-request-id` header and the persisted `requests.request_id`, never two separately derived ids. Metering (integer micro-USD, §3.5): `cost_micro_usd = Math.round(usage.prompt_tokens * in_micro_rate / 1e6) + Math.round(usage.completion_tokens * out_micro_rate / 1e6)` with rates from the date-effective pricing lookup (`WHERE model = ? AND effective_from <= date('now') ORDER BY effective_from DESC LIMIT 1`). Insert the `requests` row after the response is sent (a route-level Fastify `onResponse` hook) so logging never adds latency; a logging failure is caught/logged and must never alter the already-sent response. Set response headers `x-pg-request-id`, `x-pg-cache: miss`, and `x-pg-cost-usd` (non-streaming only, §5.1).
 
 8. **`GET /v1/models`** from `model_pricing` distinct models, OpenAI list format.
 
@@ -168,6 +168,8 @@ Cost in the row (÷1e6 for USD) should match the provider dashboard to the 4th d
    | `message_stop` | finish chunk + usage chunk (combined stash) + `data: [DONE]` |
 
 5. **Abort handling.** One `AbortController` per request; `request.raw.on("close", ...)` aborts upstream; log row with `status='client_aborted'` and `cost_estimated=1` if no usage arrived (§3.5's estimator: `chars/4` is fine, it's flagged).
+
+6. **`GET /v1/requests/:request_id/usage`** (§5.1): authenticated with the same pg key that made the original request (a key can only read its own rows — look up by `request_id` **and** `api_key_id`, 404 otherwise so key ownership never leaks via a distinguishable error). This belongs in phase 2, not phase 1, because it exists specifically to serve the cost a live stream's headers can't carry (headers are sent before usage exists); a non-streaming response already has `x-pg-cost-usd`.
 
 **Verify phase 2:** same SDK snippet with `stream: true`, once per provider (`claude-*`, `gpt-*`) — chunks print incrementally; then:
 ```bash
@@ -229,7 +231,7 @@ curl -s ... | jq .error.code           # "budget_exceeded" on the very next call
 
 ### Phase 4 — Prompt registry
 
-1. **Migration + immutability trigger.** Copy §4's `002_registry.sql` in, appending:
+1. **Migration + immutability trigger.** Copy §4's `003_registry.sql` in, appending:
    ```sql
    CREATE TRIGGER prompt_versions_immutable BEFORE UPDATE ON prompt_versions
    BEGIN SELECT RAISE(ABORT, 'prompt_versions is immutable'); END;

@@ -2,10 +2,10 @@
 
 > Maintained by the orchestrator (see `ORCHESTRATOR.md`). Updated after every step. Humans: the Position line is always the truth.
 
-**Position:** Phase 0 — done and human-approved; Phase 1, step 7 — not started
-**Last session:** 2026-07-16 — completed Phase 1 step 6 validated OpenAI Chat Completions adapter and reusable bounded retry helper under Claude Sonnet 5 / high ownership
-**Repo state at last update:** The OpenAI adapter forwards every non-`pg_*` field to the official endpoint with provider auth, validates successful responses, preserves typed upstream failures, and retries only 429/5xx twice with abort-aware jitter
-**Last commit:** phase-1 step-6 (this commit) · **Last green `pnpm lint && pnpm test`:** 2026-07-16 (12 test files, 96 tests passed)
+**Position:** Phase 0 — done and human-approved; Phase 1, step 8 — not started
+**Last session:** 2026-07-17 — completed Phase 1 step 7 authenticated non-streaming chat pipeline, UUID request identity, metering, post-response logging, request hardening, and approved schema/doc correction under Claude Sonnet 5 / high ownership
+**Repo state at last update:** `POST /v1/chat/completions` validates and routes authenticated requests through injected adapters, meters exact or estimated usage with date-effective prices, returns PromptGate cost/cache/UUID headers, and persists the matching request row in `onResponse` after the reply is sent
+**Last commit:** phase-1 step-7 (this commit) · **Last green `pnpm lint && pnpm test`:** 2026-07-17 (15 test files, 123 tests passed)
 
 ## Phase status
 
@@ -14,7 +14,7 @@ Model/effort per ORCHESTRATOR.md → Model & effort assignment.
 | Phase | Name | Implementer | Status | Verify evidence | Approved by human |
 |---|---|---|---|---|---|
 | 0 | Scaffold | GPT-5.3-Codex-Spark / xhigh; Terra / medium for DB+Docker | done | `docs/evidence/phase-0.md` | project owner — 2026-07-16 |
-| 1 | OpenAI passthrough | Claude Sonnet 5 / high; Spark+Luna support | in progress (step 7) | — | — |
+| 1 | OpenAI passthrough | Claude Sonnet 5 / high; Spark+Luna support | in progress (step 8) | — | — |
 | 2 | Anthropic + streaming | Claude Opus 4.8 / xhigh; Luna fixtures | not started | — | — |
 | 3 | Cache, limits, budgets | GPT-5.6 Terra / high; Sol / xhigh budget audit | not started | — | — |
 | 4 | Prompt registry | GPT-5.6 Terra / high; Spark support | not started | — | — |
@@ -35,6 +35,7 @@ Status values: `not started` · `in progress (step K)` · `verify pending` · `a
 | B1 — eval gate technical audit | after phase 5 | GPT-5.6 Sol / xhigh | pending | — |
 | B2 — dataset/pathway verdict | after B1 | Claude Fable 5 / high | pending | — |
 | Phase 0 Compose binding | doc-authority conflict | Claude Fable 5 / high | proceed with adjustments — publish on loopback and sync the playbook | 2026-07-16 |
+| Phase 1 request identity | schema/API doc-authority conflict | Claude Fable 5 / high | proceed with adjustments — persist a UUID in migration 002, renumber the uncommitted registry/eval migrations, and schedule the owner-scoped usage endpoint in phase 2 | 2026-07-17 |
 
 ## Blockers (current)
 
@@ -62,6 +63,8 @@ Small choices the spec didn't cover (architectural ones go to the human instead 
 
 | Date | Decision | Rationale |
 |---|---|---|
+| 2026-07-17 | Applied the human-approved Fable 5 / high correction by adding nullable, uniquely indexed `requests.request_id` in `002_request_identity.sql`, enforcing UUIDs for every gateway DAO insert, renumbering the uncommitted registry/eval migrations to 003/004, and scheduling `GET /v1/requests/:request_id/usage` in phase 2. | The response UUID must be persisted for the future owner-scoped usage lookup; a new migration converges already-applied and fresh databases without editing 001, while nullable legacy rows remain compatible and unaddressable. |
+| 2026-07-17 | Made the non-streaming chat route an explicit authenticated Zod-validated pipeline with injected adapters, date-effective exact/estimated metering, route-level 1 MiB body hardening, a 120-second abort timeout, safe OpenAI error envelopes, and caught `onResponse` logging. | The route must remain fully offline-testable, keep optional provider keys from blocking boot, never leak upstream bodies or secrets, and send responses before synchronous SQLite logging; standard `invalid_request_error`/`provider_error` codes avoid expanding the documented taxonomy before phase 2. Claude Sonnet 5 / high owned the implementation and returned `APPROVE` after the orchestrator hardening pass. |
 | 2026-07-16 | Implemented the OpenAI adapter against the current official `POST /v1/chat/completions` OpenAPI contract with JSON and Bearer provider auth, kept the provider key optional until adapter invocation, and Zod-validated successful upstream responses. | Official OpenAI documentation was checked at build time without a live call; dependency injection keeps all tests offline and prevents ambient developer credentials from entering test behavior. Claude Sonnet 5 / high owned and self-reviewed the implementation. |
 | 2026-07-16 | Made shared `stripPgFields()` remove every `pg_`-prefixed key while retaining all other known and unknown fields; made the reusable provider retry helper retry only 429/5xx twice with equal jitter over 250ms/1s bases, body release, and abort cleanup. | Prefix stripping stays correct as PromptGate extensions grow and preserves OpenAI passthrough compatibility; the bounded retry behavior exactly matches §3.6 without retrying ordinary client errors or network/abort rejections. |
 | 2026-07-16 | Defined `SseChunk` as a serialized OpenAI SSE data payload plus an explicit terminal flag, made provider resolution return a discriminated success/error result including HTTP 400, and required a currently effective pricing row through a DAO. | The phase 2 seam can stream JSON or `[DONE]` without prematurely defining another wire schema; step 7 can forward `unknown_model` without reconstructing either its envelope or status; no request can route without a rate usable for metering. |
@@ -89,6 +92,7 @@ Small choices the spec didn't cover (architectural ones go to the human instead 
 
 | Date | Covered | Ended at |
 |---|---|---|
+| 2026-07-17 | Phase 1 step 7 — human-approved Fable request-identity correction, migration 002 with legacy upgrade proof, non-streaming authenticated chat route, injected providers, exact/estimated metering, UUID/cost/cache headers, bounded body/upstream limits, post-response request logging, safe error mapping, 27 focused tests, 123 total tests, build, and Sonnet 5 / high `APPROVE` | Phase 1, step 8 — not started |
 | 2026-07-16 | Phase 1 step 6 — official-spec OpenAI non-streaming adapter, shared prefix-based `pg_*` stripping, strict response validation, typed provider/config errors, reusable abort-aware 429/5xx retry helper, explicit phase 2 stream stub, and 33 focused tests under Claude Sonnet 5 / high ownership | Phase 1, step 7 — not started |
 | 2026-07-16 | Phase 1 step 5 — exact provider adapter contract, forward streaming chunk type, static provider prefixes, date-effective pricing DAO, complete `unknown_model` results, shared workspace package exports, 10 focused tests, and deployed-runtime import verification under Claude Sonnet 5 / high ownership | Phase 1, step 6 — not started |
 | 2026-07-16 | Phase 1 step 4 — shared OpenAI error formatter, DAO-backed Bearer-key lookup, disabled/invalid-key rejection, typed safe request context, protected `/v1` plugin seam, and 5 focused auth tests under Claude Sonnet 5 / high ownership | Phase 1, step 5 — not started |

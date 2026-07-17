@@ -202,7 +202,20 @@ CREATE TABLE cache_entries (
   last_hit_at TEXT
 );
 
--- 002_registry.sql (decisions #8, #9)
+-- 002_request_identity.sql
+-- Adds the gateway-generated request UUID (BUILD_PLAYBOOK.md phase 1 step 7):
+-- the same crypto.randomUUID() value returned on `x-pg-request-id` is what
+-- gets persisted here. Nullable at the schema level only because SQLite's
+-- ALTER TABLE ADD COLUMN cannot backfill a NOT NULL column for rows already
+-- committed under 001_core.sql; the pipeline DAO enforces the application
+-- invariant that every gateway-created insert supplies a UUID before any SQL
+-- runs. The partial unique index (WHERE request_id IS NOT NULL) still
+-- guarantees no two populated request_ids collide while leaving legacy NULL
+-- rows unconstrained.
+ALTER TABLE requests ADD COLUMN request_id TEXT;
+CREATE UNIQUE INDEX idx_requests_request_id ON requests(request_id) WHERE request_id IS NOT NULL;
+
+-- 003_registry.sql (decisions #8, #9)
 CREATE TABLE prompts (
   id INTEGER PRIMARY KEY,
   slug TEXT NOT NULL UNIQUE,             -- "safety_screen"
@@ -238,7 +251,7 @@ CREATE TABLE label_history (              -- audit trail; rollback = another lab
   moved_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
--- 003_evals.sql (decisions #10–#12)
+-- 004_evals.sql (decisions #10–#12)
 CREATE TABLE eval_datasets (
   id INTEGER PRIMARY KEY,
   slug TEXT NOT NULL UNIQUE,
@@ -291,7 +304,7 @@ OpenAI-compatible; auth via `Authorization: Bearer pg-<key>`. PromptGate extensi
 | `pg_feature: "inbox_summary"` | `x-pg-feature` | Free-text tag → cost-per-feature reporting. |
 | `pg_no_cache: true` | `x-pg-no-cache` | Skip cache read and write. |
 
-Response = standard OpenAI response, plus response headers: `x-pg-cache: hit|miss` and `x-pg-request-id` (always), `x-pg-cost-usd` (**non-streaming and cache-hit responses only** — on a live stream, headers are sent before usage exists, so the cost cannot be in them). For streamed requests, final cost is retrievable via `GET /v1/requests/:request_id/usage` (authenticated with the same pg key; a key can only read its own requests).
+Response = standard OpenAI response, plus response headers: `x-pg-cache: hit|miss` and `x-pg-request-id` (always), `x-pg-cost-usd` (**non-streaming and cache-hit responses only** — on a live stream, headers are sent before usage exists, so the cost cannot be in them). `x-pg-request-id` is the `crypto.randomUUID()` generated once at pipeline entry (migration `002_request_identity.sql`) — the exact same value is what gets persisted as `requests.request_id`, never a separately derived id. For streamed requests, final cost is retrievable via `GET /v1/requests/:request_id/usage` (authenticated with the same pg key; a key can only read its own requests; this endpoint ships in phase 2, alongside streaming, since only a streamed request needs it — a non-streaming response already carries `x-pg-cost-usd`).
 
 Also implement `GET /v1/models` (list from `model_pricing`) — many OpenAI-compat clients call it on startup. `TODO(verify)`: whether web_builder_llm calls `/v1/models` to populate its model picker.
 
