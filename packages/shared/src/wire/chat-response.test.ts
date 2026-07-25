@@ -89,6 +89,77 @@ describe("ChatResponseSchema", () => {
 		expect(result.success).toBe(false);
 	});
 
+	test("accepts paired cache usage fields that sum to prompt_tokens", () => {
+		const result = ChatResponseSchema.safeParse({
+			id: "chatcmpl-1",
+			object: "chat.completion",
+			created: 1_700_000_000,
+			model: "deepseek-v4-flash",
+			choices: [
+				{
+					index: 0,
+					message: { role: "assistant", content: "hi there" },
+					finish_reason: "stop",
+				},
+			],
+			usage: {
+				prompt_tokens: 10,
+				completion_tokens: 5,
+				total_tokens: 15,
+				prompt_cache_hit_tokens: 4,
+				prompt_cache_miss_tokens: 6,
+			},
+		});
+		expect(result.success).toBe(true);
+	});
+
+	test("rejects a cache hit/miss pair that does not sum to prompt_tokens", () => {
+		const result = ChatResponseSchema.safeParse({
+			id: "chatcmpl-1",
+			object: "chat.completion",
+			created: 1_700_000_000,
+			model: "deepseek-v4-flash",
+			choices: [
+				{
+					index: 0,
+					message: { role: "assistant", content: "hi there" },
+					finish_reason: "stop",
+				},
+			],
+			usage: {
+				prompt_tokens: 10,
+				completion_tokens: 5,
+				total_tokens: 15,
+				prompt_cache_hit_tokens: 4,
+				prompt_cache_miss_tokens: 5,
+			},
+		});
+		expect(result.success).toBe(false);
+	});
+
+	test("rejects a lone cache usage field without its pair", () => {
+		const result = ChatResponseSchema.safeParse({
+			id: "chatcmpl-1",
+			object: "chat.completion",
+			created: 1_700_000_000,
+			model: "deepseek-v4-flash",
+			choices: [
+				{
+					index: 0,
+					message: { role: "assistant", content: "hi there" },
+					finish_reason: "stop",
+				},
+			],
+			usage: {
+				prompt_tokens: 10,
+				completion_tokens: 5,
+				total_tokens: 15,
+				prompt_cache_hit_tokens: 4,
+			},
+		});
+		expect(result.success).toBe(false);
+	});
+
 	test("rejects an invalid finish_reason value", () => {
 		const result = ChatResponseSchema.safeParse({
 			id: "chatcmpl-1",

@@ -14,21 +14,21 @@ The portfolio has many LLM *consumers* (assistants, copilots, generators). This 
 A self-hosted **model gateway** (multi-provider routing — already a mastered pattern — now with per-request cost and latency metering, response caching, budgets and rate limits per API key), plus a **prompt registry** (versioned prompts, diffs, rollback), plus an **eval harness**: golden datasets, deterministic assertions + LLM-as-judge scoring, run in CI so a prompt or model change fails the build on quality regression. Dashboard tracks cost and quality drift over time.
 
 ## Key deliverables
-1. Gateway with 2 providers, metering, caching, per-key budgets
+1. Gateway with 4 providers, metering, caching, per-key budgets
 2. Prompt registry with version history and diff view
 3. Eval harness + 1 golden dataset, wired as a CI regression gate
 4. Cost/quality drift dashboard
 5. Dogfood proof: one existing app's LLM calls routed through the gateway
 
 ## Scope guard
-2 providers, 1 golden dataset (reuse a task from an existing app — e.g. carematch_ai's safety screening), 1 CI gate. Not a SaaS: single-tenant, self-hosted.
+4 providers (amended 2026-07-25, see decision #2), 1 golden dataset (reuse a task from an existing app — e.g. carematch_ai's safety screening), 1 CI gate. Not a SaaS: single-tenant, self-hosted.
 
-## Decisions (locked 2026-07-12; amended 2026-07-15 after human-approved plan reviews — see PROGRESS.md decision log)
+## Decisions (locked 2026-07-12; amended 2026-07-15 after human-approved plan reviews and 2026-07-25 for the four-provider scope amendment — see PROGRESS.md decision log)
 
 ### A. Architecture
 1. **Gateway API surface: Chat Completions-compatible subset of `/v1/chat/completions`** (the fields the dogfood apps use, not universal OpenAI compatibility). Makes dogfooding a base-URL change (see #16).
-2. **Providers: Anthropic + OpenAI.** Real cost metering on both is the point. Keep CI cost at pennies by pinning cheap models. Ollama as a stretch third provider only.
-3. **Streaming: yes in v1.** Existing apps stream (AI_Inbox_Copilot SSE, AI_reading_assistant); meter via each provider's stream usage metadata (OpenAI: usage chunk via `stream_options.include_usage`; Anthropic: `message_start` input tokens + `message_delta` output tokens).
+2. **Providers: OpenAI, Anthropic, Gemini, DeepSeek.** (Amended 2026-07-25, human-approved — see PROGRESS.md decision log; supersedes the original 2-provider lock. BUILD_PLAYBOOK.md phase 1 steps 9–12 build the foundation, then DeepSeek and Gemini non-streaming adapters, then integration.) Real cost metering across all four is the point. Phase verification makes bounded live calls only for configured provider keys and records every unavailable provider as deferred, never falsely green; Gemini and DeepSeek are the current live-verification path, while OpenAI and Anthropic remain future activation checks. Keep CI cost at pennies by pinning cheap models. Ollama remains a stretch fifth provider only.
+3. **Streaming: yes in v1.** Existing apps stream (AI_Inbox_Copilot SSE, AI_reading_assistant); meter via each provider's stream usage metadata (OpenAI, Gemini, and DeepSeek: final usage requested with `stream_options.include_usage`; Anthropic: `message_start` input tokens + `message_delta` output tokens).
 
 ### B. Stack
 4. **Language: TypeScript (Fastify).** Streaming proxies and provider SDKs are first-class in Node, and the built-in dashboard is cheapest there. Python/FastAPI is already proven twice (Distributed Job Queue, SIGNAL); Go's value is better banked by finishing Cross-Device Clipboard Sync.
@@ -52,4 +52,4 @@ A self-hosted **model gateway** (multi-provider routing — already a mastered p
 16. **Dogfood app: web_builder_llm** (kept in `Finished/`), NOT carematch_ai (archived). web_builder_llm already supports OpenAI-compatible providers via configurable base URL (it routes Mistral/xAI/Groq/OpenRouter that way), so with decision #1 dogfooding is literally pointing that base URL at PromptGate. Backup: AI_Inbox_Copilot.
 17. **Repo layout: monorepo** — `packages/{shared,gateway,evals,dashboard}` (shared holds wire types/cost math/template engine).
 
-Open trade-offs consciously accepted: #2 means CI eval runs cost real (tiny) money — Ollama would make them free at the cost of weaker cost-metering proof; #4 passes on Go reinforcement because clipsync covers Go better.
+Open trade-offs consciously accepted: #2 means CI eval runs cost real (tiny) money — the unapproved Ollama stretch fifth provider would make them free at the cost of weaker cost-metering proof; #4 passes on Go reinforcement because clipsync covers Go better.

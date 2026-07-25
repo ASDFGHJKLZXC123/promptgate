@@ -56,6 +56,12 @@ test("a fake adapter satisfies the ProviderAdapter contract for both provider na
 	expect(anthropicAdapter.name).toBe("anthropic");
 });
 
+test("ProviderName includes the human-approved four-provider scope (step 9 foundation only — no gemini/deepseek adapters yet)", () => {
+	const names: ProviderName[] = ["openai", "anthropic", "gemini", "deepseek"];
+
+	expect(names).toEqual(["openai", "anthropic", "gemini", "deepseek"]);
+});
+
 test("complete() resolves a ChatResponse", async () => {
 	const adapter = makeFakeAdapter("openai");
 	const controller = new AbortController();

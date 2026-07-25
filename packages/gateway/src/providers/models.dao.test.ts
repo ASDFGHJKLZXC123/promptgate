@@ -7,12 +7,13 @@ import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import { openDatabase } from "../db/index.js";
 import { migrate } from "../db/migrate.js";
 import { listCurrentModels } from "./models.dao.js";
+import type { ProviderName } from "./types.js";
 
 let tempDbDir: string;
 let db: Database.Database;
 
 interface SeedPricingRow {
-	provider: "openai" | "anthropic";
+	provider: ProviderName;
 	model: string;
 	effective_from: string;
 	input_micro_usd_per_mtok?: number;

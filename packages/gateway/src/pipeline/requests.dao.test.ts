@@ -107,7 +107,7 @@ test("allows multiple legacy NULL request_id rows to coexist (pre-migration-002 
 	expect(countRows()).toBe(2);
 });
 
-test("migration 002 upgrades an already-applied 001 database without losing legacy rows", () => {
+test("migrations 002 and 003 upgrade an already-applied 001 database without losing legacy rows", () => {
 	const legacyDb = openDatabase(join(tempDbDir, "legacy-001.db"));
 	try {
 		legacyDb.exec(
@@ -146,6 +146,63 @@ test("migration 002 upgrades an already-applied 001 database without losing lega
 		expect(applied.map((row) => row.name)).toEqual([
 			"001_core.sql",
 			"002_request_identity.sql",
+			"003_provider_pricing.sql",
+		]);
+	} finally {
+		legacyDb.close();
+	}
+});
+
+test("migration 003 preserves pricing rows from an already-applied 002 database", () => {
+	const legacyDb = openDatabase(join(tempDbDir, "legacy-002.db"));
+	try {
+		for (const migration of ["001_core.sql", "002_request_identity.sql"]) {
+			legacyDb.exec(
+				readFileSync(
+					new URL(`../db/migrations/${migration}`, import.meta.url),
+					"utf8",
+				),
+			);
+		}
+		legacyDb.exec(`CREATE TABLE _migrations (
+			name TEXT PRIMARY KEY,
+			applied_at TEXT NOT NULL DEFAULT (datetime('now'))
+		)`);
+		legacyDb
+			.prepare("INSERT INTO _migrations (name) VALUES (?), (?)")
+			.run("001_core.sql", "002_request_identity.sql");
+		legacyDb
+			.prepare(
+				`INSERT INTO model_pricing (
+					provider, model, input_micro_usd_per_mtok,
+					output_micro_usd_per_mtok, effective_from
+				) VALUES ('openai', 'gpt-legacy', 1000000, 2000000, '2020-01-01')`,
+			)
+			.run();
+
+		migrate(legacyDb);
+
+		const pricing = legacyDb
+			.prepare(
+				`SELECT model, input_micro_usd_per_mtok,
+					cached_input_micro_usd_per_mtok,
+					output_micro_usd_per_mtok
+				 FROM model_pricing WHERE model = 'gpt-legacy'`,
+			)
+			.get();
+		expect(pricing).toEqual({
+			model: "gpt-legacy",
+			input_micro_usd_per_mtok: 1_000_000,
+			cached_input_micro_usd_per_mtok: null,
+			output_micro_usd_per_mtok: 2_000_000,
+		});
+		const applied = legacyDb
+			.prepare("SELECT name FROM _migrations ORDER BY name")
+			.all() as Array<{ name: string }>;
+		expect(applied.map((row) => row.name)).toEqual([
+			"001_core.sql",
+			"002_request_identity.sql",
+			"003_provider_pricing.sql",
 		]);
 	} finally {
 		legacyDb.close();

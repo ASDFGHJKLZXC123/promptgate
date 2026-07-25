@@ -1,6 +1,6 @@
 # PromptGate — Implementation Guide
 
-Companion to `PromptGate_PROJECT_IDEA.md`. All 17 locked decisions (2026-07-12) are treated as fixed; this guide turns them into a buildable spec. Sections referencing code in `carematch_ai` (Archive/) or `web_builder_llm` (Finished/) carry `TODO(verify)` markers — confirm against the actual repos when you reach those phases.
+Companion to `PromptGate_PROJECT_IDEA.md`. All 17 locked decisions (2026-07-12) are treated as fixed, except decision #2, human-approved amended 2026-07-25 to four providers (OpenAI, Anthropic, Gemini, DeepSeek) — see `PROGRESS.md`'s decision log; `GEMINI_API_KEY`/`DEEPSEEK_API_KEY` join the optional-at-boot provider keys (§1's config, BUILD_PLAYBOOK.md phase 1 step 9). Sections referencing code in `carematch_ai` (Archive/) or `web_builder_llm` (Finished/) carry `TODO(verify)` markers — confirm against the actual repos when you reach those phases.
 
 ---
 
@@ -44,7 +44,7 @@ promptgate/
 │   │   ├── src/
 │   │   │   ├── server.ts
 │   │   │   ├── pipeline/        # auth, ratelimit, budget, promptResolve, cache, meter
-│   │   │   ├── providers/       # openai.ts, anthropic.ts, types.ts
+│   │   │   ├── providers/       # openai.ts, anthropic.ts, gemini.ts, deepseek.ts, types.ts
 │   │   │   ├── registry/
 │   │   │   ├── admin/
 │   │   │   └── db/              # migrations/, dao/
@@ -70,7 +70,7 @@ client (OpenAI SDK, base_url = PromptGate)
 │ 3 budget      → month-to-date spend vs budget (30s cached)        │
 │ 4 prompt res. → if pg_prompt: fetch version, interpolate pg_vars  │
 │ 5 cache       → sha256(canonical request) → hit? replay & skip 6  │
-│ 6 provider    → route by model prefix; translate for Anthropic    │
+│ 6 provider    → prefix route; translate or compat-proxy by vendor │
 │ 7 meter       → tokens from usage, cost from model_pricing        │
 │ 8 log         → insert requests row (post-response, non-blocking) │
 └───────────────────────────────────────────────────────────────────┘
@@ -86,10 +86,14 @@ Static route map, no magic: models must exist in `model_pricing` or the request 
 const ROUTES = [
   { match: /^claude-/, provider: "anthropic" },
   { match: /^(gpt-|o[0-9])/, provider: "openai" },
+  { match: /^gemini-/, provider: "gemini" },
+  { match: /^deepseek-/, provider: "deepseek" },
 ];
 ```
 
-### 3.2 Anthropic adapter (translate OpenAI wire format ↔ Anthropic Messages API)
+The prefix-selected provider must equal the provider on the current date-effective `model_pricing` row. A missing price or provider mismatch is `unknown_model`; PromptGate never routes traffic under another provider's rate.
+
+### 3.2 Provider adapters (OpenAI-compatible boundary + Anthropic translation)
 
 - `system` role message(s) → Anthropic `system` param (concatenate if multiple).
 - `max_tokens` required by Anthropic → default from config if client omits.
@@ -98,10 +102,15 @@ const ROUTES = [
 - Streaming: translate Anthropic SSE events into OpenAI `chat.completion.chunk` frames. Usage arrives split: `input_tokens` on `message_start`, `output_tokens` on `message_delta` — combine both for the final usage chunk (decision #3's metering path).
 - **Tool calls: out of scope for v1.** Return a 400 (`tools not supported for anthropic-routed models yet`) rather than a broken translation. `TODO(verify)`: check whether web_builder_llm actually sends `tools`; if yes, tool translation moves from stretch into Phase 2, because dogfooding (deliverable 5) depends on it.
 - OpenAI-routed models: pure passthrough (headers scrubbed, auth swapped) — no body rewriting.
+- Gemini-routed models use Google's official OpenAI-compatible endpoint, `https://generativelanguage.googleapis.com/v1beta/openai/chat/completions`, with Bearer `GEMINI_API_KEY`. Keep a provider-specific wrapper even when a narrow compatible core is shared.
+- DeepSeek-routed models use `https://api.deepseek.com/v1/chat/completions` with Bearer `DEEPSEEK_API_KEY`. Preserve caller-supplied compatibility fields, including `thinking`; do not silently enable/disable reasoning. Its normalized usage retains `prompt_cache_hit_tokens` and `prompt_cache_miss_tokens` for cache-aware pricing.
+- All four API keys are optional at boot and required only when their adapter is invoked. A missing key becomes a safe `provider_error`, never a startup failure or secret-bearing response.
+
+Build-time sources verified 2026-07-25: [Gemini OpenAI compatibility](https://ai.google.dev/gemini-api/docs/openai), [Gemini model/pricing](https://ai.google.dev/gemini-api/docs/pricing), [DeepSeek Chat Completions](https://api-docs.deepseek.com/api/create-chat-completion/), and [DeepSeek pricing](https://api-docs.deepseek.com/quick_start/pricing/). Re-check these official contracts when implementing adapters or adding a new date-effective price row.
 
 ### 3.3 Streaming (decision #3)
 
-- SSE passthrough with backpressure (pipe, don't buffer-then-send).
+- SSE passthrough with backpressure (pipe, don't buffer-then-send). OpenAI, Gemini, and DeepSeek are each validated against their own OpenAI-compatible transcript and request final usage with `stream_options.include_usage`; Anthropic uses the explicit event translation above.
 - Latency metering: record `first_token_ms` (time to first content chunk) and `total_ms`.
 - Cache + streaming: accumulate chunks server-side while streaming to the client; on completion, store the assembled response. A cache **hit** on a streaming request is replayed as a synthetic stream (single content chunk + final usage chunk is acceptable v1 behavior; chunked replay is a polish item).
 - Client disconnect mid-stream: abort upstream request, log row with `status = 'client_aborted'`, cost = tokens billed so far if the provider reported usage, else estimate flag (see §3.5).
@@ -116,8 +125,8 @@ const ROUTES = [
 
 ### 3.5 Metering & cost (deliverable 1's core)
 
-- Source of truth for tokens: provider `usage` object (both providers return it, including in streaming per decision #3).
-- All money is integer micro-USD (§1). Cost = tokens × rates from `model_pricing` (rates stored as micro-USD per Mtok, integer division with `Math.round`). Pricing is **date-effective** (see schema): a price change inserts a new row, historical requests keep their historical cost. `TODO(build-time)`: seed with current Anthropic/OpenAI prices when you start — do not trust any hardcoded numbers in docs, they go stale.
+- Source of truth for tokens: each provider's normalized `usage` object, including final streaming usage when the provider reports it (decision #3).
+- All money is integer micro-USD (§1). Ordinary cost = `round(input_tokens × input_rate / 1e6) + round(output_tokens × output_rate / 1e6)`. When a pricing row has `cached_input_micro_usd_per_mtok` and usage contains the validated cache-hit/cache-miss pair, cost = `round(cache_hit_tokens × cached_input_rate / 1e6) + round(cache_miss_tokens × input_rate / 1e6) + round(output_tokens × output_rate / 1e6)`: the three billing components round independently before summing. If either the split or cached rate is absent, all input uses the ordinary rate. Pricing is **date-effective** (see schema): a price change inserts a new row, historical requests keep their historical cost. `TODO(build-time)`: seed only human-approved current prices from all four providers' official pages.
 - If usage is missing (aborted stream, provider hiccup): estimate via a cheap tokenizer approximation and set `cost_estimated = 1` so dashboards can show estimated vs exact.
 - Rate limiting: token bucket per key, in-memory (single process, so fine); refill from `api_keys.rate_limit_rpm`.
 - **Budget is a hard cap via reserve-then-reconcile** (a post-hoc spend sum alone is only a delayed soft limit — a rapid loop overspends before rows land):
@@ -149,7 +158,7 @@ CREATE TABLE api_keys (
 
 CREATE TABLE model_pricing (
   id INTEGER PRIMARY KEY,
-  provider TEXT NOT NULL,                -- 'anthropic' | 'openai'
+  provider TEXT NOT NULL,                -- 'openai' | 'anthropic' | 'gemini' | 'deepseek'
   model TEXT NOT NULL,
   input_micro_usd_per_mtok INTEGER NOT NULL,   -- e.g. $3.00/Mtok = 3000000
   output_micro_usd_per_mtok INTEGER NOT NULL,
@@ -215,7 +224,12 @@ CREATE TABLE cache_entries (
 ALTER TABLE requests ADD COLUMN request_id TEXT;
 CREATE UNIQUE INDEX idx_requests_request_id ON requests(request_id) WHERE request_id IS NOT NULL;
 
--- 003_registry.sql (decisions #8, #9)
+-- 003_provider_pricing.sql (decision #2 amendment, cache-aware metering)
+-- Nullable preserves already-seeded rows and models with no distinct cache rate.
+ALTER TABLE model_pricing ADD COLUMN cached_input_micro_usd_per_mtok INTEGER;
+
+-- 004_registry.sql (decisions #8, #9; renumbered from 003 on 2026-07-25 —
+-- 003 is now 003_provider_pricing.sql, phase 1 step 9)
 CREATE TABLE prompts (
   id INTEGER PRIMARY KEY,
   slug TEXT NOT NULL UNIQUE,             -- "safety_screen"
@@ -251,7 +265,8 @@ CREATE TABLE label_history (              -- audit trail; rollback = another lab
   moved_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
--- 004_evals.sql (decisions #10–#12)
+-- 005_evals.sql (decisions #10–#12; renumbered from 004 on 2026-07-25 —
+-- see 004_registry.sql's note)
 CREATE TABLE eval_datasets (
   id INTEGER PRIMARY KEY,
   slug TEXT NOT NULL UNIQUE,
@@ -306,7 +321,7 @@ OpenAI-compatible; auth via `Authorization: Bearer pg-<key>`. PromptGate extensi
 
 Response = standard OpenAI response, plus response headers: `x-pg-cache: hit|miss` and `x-pg-request-id` (always), `x-pg-cost-usd` (**non-streaming and cache-hit responses only** — on a live stream, headers are sent before usage exists, so the cost cannot be in them). `x-pg-request-id` is the `crypto.randomUUID()` generated once at pipeline entry (migration `002_request_identity.sql`) — the exact same value is what gets persisted as `requests.request_id`, never a separately derived id. For streamed requests, final cost is retrievable via `GET /v1/requests/:request_id/usage` (authenticated with the same pg key; a key can only read its own requests; this endpoint ships in phase 2, alongside streaming, since only a streamed request needs it — a non-streaming response already carries `x-pg-cost-usd`).
 
-Also implement `GET /v1/models` (list from `model_pricing`) — many OpenAI-compat clients call it on startup. `TODO(verify)`: whether web_builder_llm calls `/v1/models` to populate its model picker.
+Also implement `GET /v1/models` (list from currently effective `model_pricing`) — many OpenAI-compat clients call it on startup. The list describes routed/priced capability, not credential readiness: a model can appear while its optional provider key is absent, then fail safely only when called. `TODO(verify)`: whether web_builder_llm calls `/v1/models` to populate its model picker.
 
 ### 5.2 Admin API (`/admin/api/*`, auth: `x-admin-token` = `ADMIN_TOKEN` env; decision #15 keeps this deliberately dumb)
 
@@ -354,8 +369,10 @@ description: Safety screening triage (seeded from carematch_ai)
 prompts:
   - safety_screen@candidate          # PromptGate extension: registry refs, not inline prompts
 providers:
-  - claude-<cheap-tier>              # TODO(build-time): pin the current cheap model of each provider
-  - gpt-<cheap-tier>
+  - claude-sonnet-5
+  - gpt-5.6-luna
+  - gemini-2.5-flash-lite
+  - deepseek-v4-flash
 defaultTest:
   threshold: 0.8            # promptfoo puts test-level threshold directly on the test case, NOT under options
 tests:
@@ -386,7 +403,7 @@ pg-eval run --dataset safety_screening --prompt safety_screen@candidate \
             --key $PG_EVAL_KEY --admin-token $PG_ADMIN_TOKEN
 ```
 
-- All eval traffic goes **through the gateway itself** (dogfooding: evals get metered and budgeted like any client) with `pg_no_cache: true` — persisted quality measurements must hit live models or drift stays invisible (`--allow-cache` exists for local harness development only and marks the run `trigger: 'manual'`). Judge calls also go through the gateway using **`gpt-5.6-terra` with `reasoning_effort: "high"`** (decision #11) and `response_format: {type: "json_object"}`; rubric prompts live in the registry (`judge_rubric_v1`) like any other prompt.
+- All eval traffic goes **through the gateway itself** (dogfooding: evals get metered and budgeted like any client) with `pg_no_cache: true` — persisted quality measurements must hit live models or drift stays invisible (`--allow-cache` exists for local harness development only and marks the run `trigger: 'manual'`). Judge calls also go through the gateway using **`gpt-5.6-terra` with `reasoning_effort: "high"`** (decision #11) and `response_format: {type: "json_object"}`; rubric prompts live in the registry (`judge_rubric_v1`) like any other prompt. The four-provider amendment does not replace that locked judge: Phase 5 remains blocked until a working OpenAI key exists, unless the human separately amends decision #11. This future prerequisite is not a Phase 1 blocker.
 - Label freezing: at run start, every label ref (`@candidate`, `@prod`) is resolved to a concrete version once; all cases in the run use that version, and it's what `eval_runs.prompt_version` records.
 - One `eval_runs` row per model: N models in the dataset = N runs sharing a `git_sha`, each with its own results (matches the schema's `(run_id, case_id)` key).
 - Deterministic assertions run first and short-circuit; the judge only runs on cases that declare `llm-rubric` — decision #11's cost control.
@@ -424,6 +441,8 @@ jobs:
           echo "ADMIN_TOKEN=$(openssl rand -hex 24)" >> .env
           echo "ANTHROPIC_API_KEY=${{ secrets.ANTHROPIC_API_KEY }}" >> .env
           echo "OPENAI_API_KEY=${{ secrets.OPENAI_API_KEY }}" >> .env
+          echo "GEMINI_API_KEY=${{ secrets.GEMINI_API_KEY }}" >> .env
+          echo "DEEPSEEK_API_KEY=${{ secrets.DEEPSEEK_API_KEY }}" >> .env
           grep ADMIN_TOKEN .env >> "$GITHUB_ENV"     # pg-eval needs it too
       - run: docker compose up -d --wait             # gateway + fresh sqlite
       - run: pnpm --filter @promptgate/evals exec pg-eval seed-ci   # $1 ci key, prompts, labels, dataset
@@ -473,8 +492,8 @@ The phase-by-phase playbook — ordered steps, exact files, commands, key code, 
 
 ## 11. Testing strategy
 
-- **Unit (per PR, no network):** provider adapters against recorded fixtures (checked-in JSON of real OpenAI/Anthropic responses, streaming transcripts as SSE text files); template engine; cache-key canonicalization (property test: key order / whitespace never changes hash); cost math against pricing-table edge dates.
-- **Integration (per PR, no network):** Fastify app with a **fake provider** (in-process HTTP server speaking both wire formats) — full pipeline tests: auth → budget → cache → log, streaming included. This is most of the confidence.
+- **Unit (per PR, no network):** all four provider adapters against provider-specific recorded/official-contract fixtures (checked-in non-streaming JSON plus SSE transcripts); template engine; cache-key canonicalization (property test: key order / whitespace never changes hash); ordinary and cache-split cost math against pricing-table edge dates.
+- **Integration (per PR, no network):** Fastify app with injected **fake adapters** for all four normalized provider paths — full pipeline tests: auth → budget → cache → log, streaming included. This is most of the confidence.
 - **Contract (nightly, live, tiny):** `contract-nightly.yml` (created in playbook phase 8, step 6 — explicitly deferred until then) sends one minimal streaming + one non-streaming request per provider with pinned cheap models and asserts response shape against the adapter's Zod schemas. Drift → red badge before it breaks a workday. This closes the idea file's "contract testing against provider APIs" bonus concept.
 - **Eval-of-the-evals:** one meta test — run `pg-eval` against a fixture dataset with a fake provider that returns known outputs, assert exact pass/fail/score results. The gate must itself be tested or it will be quietly wrong.
 
@@ -483,7 +502,7 @@ The phase-by-phase playbook — ordered steps, exact files, commands, key code, 
 - **Network exposure:** the gateway binds `0.0.0.0` inside the container but compose publishes only to the host; for single-host self-hosting keep the published port on loopback (`127.0.0.1:8787:8787`) unless remote clients need it — in which case put a TLS-terminating reverse proxy (Caddy/nginx) in front. The gateway itself never does TLS.
 - **Data at rest:** `cache_entries` and `prompt_versions` store prompts and responses in **plaintext SQLite**. Acceptable for single-tenant self-hosted; document it in the README so nobody routes secrets through it unknowingly. Retention is bounded: cache TTL (24h default) + the 90-day requests pruner.
 - **Input hardening:** Fastify `bodyLimit` (default 1 MB, configurable) on `/v1/*`; upstream request timeout (default 120s) with abort; admin token compared timing-safe; `x-pg-request-id` is a UUID, not a guessable sequence, since `GET /v1/requests/:id/usage` is keyed on it plus the owning pg key.
-- **Secrets:** provider keys and `ADMIN_TOKEN` only via env (`.env` gitignored, `.env.example` complete); never logged, never in error bodies. CI uses dedicated provider keys with provider-side spend limits (§7.4).
+- **Secrets:** `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`, `DEEPSEEK_API_KEY`, and `ADMIN_TOKEN` only via env (`.env` gitignored, `.env.example` complete); provider keys remain optional at boot and are never logged or returned in error bodies. CI uses dedicated provider keys with provider-side spend limits (§7.4).
 - **Eval data:** golden datasets must be synthetic / de-identified — the carematch-derived set is a *policy-regression* dataset, not clinical validation, and must contain no real patient text (decision #12's framing).
 
 ## 13. Risks

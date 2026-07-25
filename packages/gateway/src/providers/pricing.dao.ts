@@ -1,10 +1,13 @@
 import type Database from "better-sqlite3";
+import type { ProviderName } from "./types.js";
 
 export interface ModelPricingRow {
 	id: number;
-	provider: "openai" | "anthropic";
+	provider: ProviderName;
 	model: string;
 	input_micro_usd_per_mtok: number;
+	/** Nullable (migration 003_provider_pricing.sql): set only for providers that price cache-hit input separately, e.g. DeepSeek. */
+	cached_input_micro_usd_per_mtok: number | null;
 	output_micro_usd_per_mtok: number;
 	effective_from: string;
 }
@@ -21,7 +24,7 @@ export function findCurrentPricing(
 	model: string,
 ): ModelPricingRow | null {
 	const statement = db.prepare(`
-		SELECT id, provider, model, input_micro_usd_per_mtok, output_micro_usd_per_mtok, effective_from
+		SELECT id, provider, model, input_micro_usd_per_mtok, cached_input_micro_usd_per_mtok, output_micro_usd_per_mtok, effective_from
 		FROM model_pricing
 		WHERE model = ? AND effective_from <= date('now')
 		ORDER BY effective_from DESC

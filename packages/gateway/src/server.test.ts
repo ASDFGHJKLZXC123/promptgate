@@ -8,6 +8,12 @@ import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { openDatabase } from "./db/index.js";
 
 const ADMIN_TOKEN = "test-admin-token-000000";
+const PROVIDER_KEY_NAMES = [
+	"OPENAI_API_KEY",
+	"ANTHROPIC_API_KEY",
+	"GEMINI_API_KEY",
+	"DEEPSEEK_API_KEY",
+] as const;
 
 interface AdminErrorResponse {
 	error: {
@@ -32,11 +38,22 @@ interface AdminApiKeyWithSpend extends AdminApiKey {
 
 let previousDbPath: string | undefined;
 let previousAdminToken: string | undefined;
+let previousProviderKeys: Partial<
+	Record<(typeof PROVIDER_KEY_NAMES)[number], string>
+>;
 let tempDbDir: string | undefined;
 
 beforeEach(async () => {
 	previousDbPath = process.env.DB_PATH;
 	previousAdminToken = process.env.ADMIN_TOKEN;
+	previousProviderKeys = {};
+	for (const keyName of PROVIDER_KEY_NAMES) {
+		const previous = process.env[keyName];
+		if (previous !== undefined) {
+			previousProviderKeys[keyName] = previous;
+		}
+		delete process.env[keyName];
+	}
 	process.env.ADMIN_TOKEN = ADMIN_TOKEN;
 	tempDbDir = mkdtempSync(join(tmpdir(), "promptgate-gateway-test-"));
 	process.env.DB_PATH = join(tempDbDir, "promptgate.db");
@@ -54,6 +71,15 @@ afterEach(() => {
 		delete process.env.ADMIN_TOKEN;
 	} else {
 		process.env.ADMIN_TOKEN = previousAdminToken;
+	}
+
+	for (const keyName of PROVIDER_KEY_NAMES) {
+		const previous = previousProviderKeys[keyName];
+		if (previous === undefined) {
+			delete process.env[keyName];
+		} else {
+			process.env[keyName] = previous;
+		}
 	}
 
 	if (tempDbDir) {
@@ -82,7 +108,11 @@ async function buildServer() {
 	return buildServer();
 }
 
-test("GET /healthz returns 200 and ok payload", async () => {
+test("boots with all four provider keys absent and returns a healthy response", async () => {
+	for (const keyName of PROVIDER_KEY_NAMES) {
+		expect(process.env[keyName]).toBeUndefined();
+	}
+
 	const server = await buildServer();
 	try {
 		const response = await server.inject({

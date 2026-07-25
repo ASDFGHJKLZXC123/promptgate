@@ -47,13 +47,51 @@ function estimateCompletionTokens(response: ChatResponse): number {
 }
 
 /**
+ * Prices the input side of a request (IMPLEMENTATION_GUIDE.md §3.5, extended
+ * by BUILD_PLAYBOOK.md phase 1 step 9's cache-split metering, 2026-07-25):
+ * when the provider reported both paired cache usage fields AND the model's
+ * pricing row has a cached-input rate, price the cache-hit and cache-miss
+ * components separately (each rounded before summing, same as the output
+ * formula below); otherwise price all of `inputTokens` at the ordinary
+ * input rate. `ChatUsageSchema` already guarantees the paired fields sum to
+ * `prompt_tokens` when both are present, so this never has to reconcile a
+ * mismatch.
+ */
+function priceInputTokens(
+	usage: ChatResponse["usage"],
+	inputTokens: number,
+	pricing: NonNullable<ReturnType<typeof findCurrentPricing>>,
+): number {
+	const cacheHitTokens = usage?.prompt_cache_hit_tokens;
+	const cacheMissTokens = usage?.prompt_cache_miss_tokens;
+	if (
+		cacheHitTokens !== undefined &&
+		cacheMissTokens !== undefined &&
+		pricing.cached_input_micro_usd_per_mtok !== null
+	) {
+		return (
+			Math.round(
+				(cacheHitTokens * pricing.cached_input_micro_usd_per_mtok) / 1_000_000,
+			) +
+			Math.round(
+				(cacheMissTokens * pricing.input_micro_usd_per_mtok) / 1_000_000,
+			)
+		);
+	}
+
+	return Math.round(
+		(inputTokens * pricing.input_micro_usd_per_mtok) / 1_000_000,
+	);
+}
+
+/**
  * Meters a completed non-streaming exchange (BUILD_PLAYBOOK.md phase 1 step
  * 7): exact tokens from provider `usage` when present, otherwise the
  * chars/4 estimate with `costEstimated` set so dashboards can distinguish
  * them. Cost uses the date-effective pricing row and the integer
  * micro-USD formula from IMPLEMENTATION_GUIDE.md §3.5 — `Math.round` is
- * applied per-component (input, then output) before summing, matching the
- * playbook's formula exactly.
+ * applied per-component before summing, matching the playbook's formula
+ * exactly.
  */
 export function meterUsage(
 	db: Database.Database,
@@ -75,7 +113,7 @@ export function meterUsage(
 		response.usage?.completion_tokens ?? estimateCompletionTokens(response);
 
 	const costMicroUsd =
-		Math.round((inputTokens * pricing.input_micro_usd_per_mtok) / 1_000_000) +
+		priceInputTokens(response.usage, inputTokens, pricing) +
 		Math.round((outputTokens * pricing.output_micro_usd_per_mtok) / 1_000_000);
 
 	return { inputTokens, outputTokens, costMicroUsd, costEstimated };

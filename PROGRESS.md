@@ -2,10 +2,10 @@
 
 > Maintained by the orchestrator (see `ORCHESTRATOR.md`). Updated after every step. Humans: the Position line is always the truth.
 
-**Position:** Phase 0 — done and human-approved; Phase 1 — verify pending
-**Last session:** 2026-07-17 — completed Phase 1 step 8 authenticated, DAO-backed OpenAI-compatible model listing under Claude Sonnet 5 / high ownership
-**Repo state at last update:** `GET /v1/models` lists each currently effective priced model once in deterministic OpenAI list format without provider access; all numbered Phase 1 implementation steps are complete
-**Last commit:** phase-1 step-8 (this commit) · **Last green `pnpm lint && pnpm test`:** 2026-07-17 (17 test files, 139 tests passed)
+**Position:** Phase 0 — done and human-approved; Phase 1, step 10 — not started
+**Last session:** 2026-07-25 — completed the human-approved Phase 1 step 9 four-provider config/pricing/metering foundation and synchronized every authority document
+**Repo state at last update:** provider taxonomy/config/pricing now covers OpenAI, Anthropic, Gemini, and DeepSeek; migration 003 preserves existing prices while adding optional cache-hit input rates; no Gemini/DeepSeek adapter or route exists yet
+**Last commit:** phase-1 step-9 (this commit) · **Last green `pnpm lint && pnpm test`:** 2026-07-25 (18 test files, 155 tests passed)
 
 ## Phase status
 
@@ -14,8 +14,8 @@ Model/effort per ORCHESTRATOR.md → Model & effort assignment.
 | Phase | Name | Implementer | Status | Verify evidence | Approved by human |
 |---|---|---|---|---|---|
 | 0 | Scaffold | GPT-5.3-Codex-Spark / xhigh; Terra / medium for DB+Docker | done | `docs/evidence/phase-0.md` | project owner — 2026-07-16 |
-| 1 | OpenAI passthrough | Claude Sonnet 5 / high; Spark+Luna support | verify pending | — | — |
-| 2 | Anthropic + streaming | Claude Opus 4.8 / xhigh; Luna fixtures | not started | — | — |
+| 1 | OpenAI-compatible non-streaming | Claude Sonnet 5 / high; Spark+Luna support; Sol / xhigh expansion audit | in progress (step 10) | — | — |
+| 2 | Anthropic + four-provider streaming | Claude Opus 4.8 / xhigh; Luna fixtures; Sol / xhigh checkpoint | not started | — | — |
 | 3 | Cache, limits, budgets | GPT-5.6 Terra / high; Sol / xhigh budget audit | not started | — | — |
 | 4 | Prompt registry | GPT-5.6 Terra / high; Spark support | not started | — | — |
 | 5 | Eval harness | Claude Opus 4.8 / xhigh; Spark+Luna support; Fable dataset | not started | — | — |
@@ -36,6 +36,7 @@ Status values: `not started` · `in progress (step K)` · `verify pending` · `a
 | B2 — dataset/pathway verdict | after B1 | Claude Fable 5 / high | pending | — |
 | Phase 0 Compose binding | doc-authority conflict | Claude Fable 5 / high | proceed with adjustments — publish on loopback and sync the playbook | 2026-07-16 |
 | Phase 1 request identity | schema/API doc-authority conflict | Claude Fable 5 / high | proceed with adjustments — persist a UUID in migration 002, renumber the uncommitted registry/eval migrations, and schedule the owner-scoped usage endpoint in phase 2 | 2026-07-17 |
+| Phase 1 four-provider scope | locked scope/provider expansion | Fable 5 / high unavailable (usage credits); GPT-5.6 Sol / xhigh technical audit + project owner | proceed with adjustments — approve OpenAI, Anthropic, Gemini, and DeepSeek; use an explicit available-key live matrix; add cache-aware pricing; keep full streaming parity in phase 2 | 2026-07-25 |
 
 ## Blockers (current)
 
@@ -54,8 +55,8 @@ Status values: `not started` · `in progress (step K)` · `verify pending` · `a
 
 | Item | Resolution | Date |
 |---|---|---|
-| Pinned cheap eval models (one per provider) | `gpt-5.6-luna` for OpenAI and `claude-sonnet-5` as the sole approved Anthropic route | 2026-07-16 |
-| `pricing.json` seeded from current provider pricing | Human-approved rows: Luna $1/$6, Terra $2.50/$15 effective 2026-07-16; Sonnet 5 promotional $2/$10 effective 2026-06-30 and published $3/$15 effective 2026-09-01, all expressed as integer micro-USD/Mtok | 2026-07-16 |
+| Pinned cheap eval models (one per provider) | `gpt-5.6-luna` (OpenAI), `claude-sonnet-5` (Anthropic), `gemini-2.5-flash-lite` (Gemini), and `deepseek-v4-flash` (DeepSeek) | 2026-07-25 |
+| `pricing.json` seeded from current provider pricing | Human-approved rows: Luna $1/$6, Terra $2.50/$15 effective 2026-07-16; Sonnet 5 promotional $2/$10 effective 2026-06-30 and published $3/$15 effective 2026-09-01; Gemini 2.5 Flash-Lite $0.10/$0.40 and DeepSeek V4 Flash $0.14 cache-miss input/$0.0028 cache-hit input/$0.28 output effective from the 2026-07-25 verification date, all per Mtok and stored as integer micro-USD/Mtok | 2026-07-25 |
 
 ## Decision log
 
@@ -63,8 +64,10 @@ Small choices the spec didn't cover (architectural ones go to the human instead 
 
 | Date | Decision | Rationale |
 |---|---|---|
+| 2026-07-25 | Applied the project-owner-approved decision #2 amendment from two to four providers: OpenAI, Anthropic, Gemini, and DeepSeek. Phase 1 adds DeepSeek/Gemini non-streaming in steps 10–12; Phase 2 provides streaming parity across all four. Phase verify blocks call every configured implemented provider and name missing-key activation checks as deferred, never live-green. | The owner currently has workable Gemini/DeepSeek credentials but not OpenAI/Anthropic credentials. This preserves forward support without blocking current gateway proof; it does not amend the locked `gpt-5.6-terra` judge, so a working OpenAI key remains a future Phase 5 prerequisite rather than a Phase 1 blocker. Fable 5 / high was attempted but unavailable because of usage credits; GPT-5.6 Sol / xhigh supplied the technical expansion audit before human approval. |
+| 2026-07-25 | Added nullable `model_pricing.cached_input_micro_usd_per_mtok` in migration 003, renumbered the still-uncommitted registry/eval migrations to 004/005, and defined validated DeepSeek cache usage plus three-component rounding (cache-hit input, cache-miss input, output). Older pricing JSON may omit the new field and normalizes it to `null`. | DeepSeek publishes separate cache-hit and cache-miss input prices, so one input rate cannot produce exact cost. A new additive migration upgrades both fresh and already-applied databases without rewriting 001/002; independently rounded integer micro-USD components preserve the approved no-floating-money rule. |
 | 2026-07-17 | Made `GET /v1/models` return the current official OpenAI list envelope with one deterministically ordered row per model that has a currently effective price; `owned_by` comes from the latest effective provider row and `created` is stable Unix seconds from the earliest pricing date. | Official OpenAI OpenAPI was checked at build time; sourcing the endpoint exclusively through a DAO keeps provider keys optional, avoids network calls, excludes future-only routes, and prevents price-history duplicates. Claude Sonnet 5 / high owned the implementation. |
-| 2026-07-17 | Applied the human-approved Fable 5 / high correction by adding nullable, uniquely indexed `requests.request_id` in `002_request_identity.sql`, enforcing UUIDs for every gateway DAO insert, renumbering the uncommitted registry/eval migrations to 003/004, and scheduling `GET /v1/requests/:request_id/usage` in phase 2. | The response UUID must be persisted for the future owner-scoped usage lookup; a new migration converges already-applied and fresh databases without editing 001, while nullable legacy rows remain compatible and unaddressable. |
+| 2026-07-17 | Applied the human-approved Fable 5 / high correction by adding nullable, uniquely indexed `requests.request_id` in `002_request_identity.sql`, enforcing UUIDs for every gateway DAO insert, renumbering the then-uncommitted registry/eval migrations (subsequently moved to 004/005 by the 2026-07-25 pricing migration), and scheduling `GET /v1/requests/:request_id/usage` in phase 2. | The response UUID must be persisted for the future owner-scoped usage lookup; a new migration converges already-applied and fresh databases without editing 001, while nullable legacy rows remain compatible and unaddressable. |
 | 2026-07-17 | Made the non-streaming chat route an explicit authenticated Zod-validated pipeline with injected adapters, date-effective exact/estimated metering, route-level 1 MiB body hardening, a 120-second abort timeout, safe OpenAI error envelopes, and caught `onResponse` logging. | The route must remain fully offline-testable, keep optional provider keys from blocking boot, never leak upstream bodies or secrets, and send responses before synchronous SQLite logging; standard `invalid_request_error`/`provider_error` codes avoid expanding the documented taxonomy before phase 2. Claude Sonnet 5 / high owned the implementation and returned `APPROVE` after the orchestrator hardening pass. |
 | 2026-07-16 | Implemented the OpenAI adapter against the current official `POST /v1/chat/completions` OpenAPI contract with JSON and Bearer provider auth, kept the provider key optional until adapter invocation, and Zod-validated successful upstream responses. | Official OpenAI documentation was checked at build time without a live call; dependency injection keeps all tests offline and prevents ambient developer credentials from entering test behavior. Claude Sonnet 5 / high owned and self-reviewed the implementation. |
 | 2026-07-16 | Made shared `stripPgFields()` remove every `pg_`-prefixed key while retaining all other known and unknown fields; made the reusable provider retry helper retry only 429/5xx twice with equal jitter over 250ms/1s bases, body release, and abort cleanup. | Prefix stripping stays correct as PromptGate extensions grow and preserves OpenAI passthrough compatibility; the bounded retry behavior exactly matches §3.6 without retrying ordinary client errors or network/abort rejections. |
@@ -93,6 +96,7 @@ Small choices the spec didn't cover (architectural ones go to the human instead 
 
 | Date | Covered | Ended at |
 |---|---|---|
+| 2026-07-25 | Phase 1 step 9 — human-approved four-provider authority amendment; optional Gemini/DeepSeek boot config; approved Gemini/DeepSeek prices; additive cache-rate migration with legacy preservation; Zod-validated paired cache usage; exact cache-hit/cache-miss/output metering; pricing/DAO compatibility; 16 focused test additions, 155 total tests, lint, and build. Claude Sonnet 5 / high produced the bounded draft but did not return before the orchestration cap; GPT-5.6 Sol / xhigh independently audited the integrated result. | Phase 1, step 10 — not started |
 | 2026-07-17 | Phase 1 step 8 — authenticated DAO-backed `GET /v1/models`, current date-effective distinct rows, exact official OpenAI list envelope, deterministic ordering, offline provider/network guardrails, 16 focused tests, 139 total tests, and build under Claude Sonnet 5 / high ownership | Phase 1 — verify pending |
 | 2026-07-17 | Phase 1 step 7 — human-approved Fable request-identity correction, migration 002 with legacy upgrade proof, non-streaming authenticated chat route, injected providers, exact/estimated metering, UUID/cost/cache headers, bounded body/upstream limits, post-response request logging, safe error mapping, 27 focused tests, 123 total tests, build, and Sonnet 5 / high `APPROVE` | Phase 1, step 8 — not started |
 | 2026-07-16 | Phase 1 step 6 — official-spec OpenAI non-streaming adapter, shared prefix-based `pg_*` stripping, strict response validation, typed provider/config errors, reusable abort-aware 429/5xx retry helper, explicit phase 2 stream stub, and 33 focused tests under Claude Sonnet 5 / high ownership | Phase 1, step 7 — not started |

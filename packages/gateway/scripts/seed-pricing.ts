@@ -6,9 +6,18 @@ import { z } from "zod";
 
 const ModelPricingRowSchema = z
 	.object({
-		provider: z.enum(["openai", "anthropic"]),
+		provider: z.enum(["openai", "anthropic", "gemini", "deepseek"]),
 		model: z.string().min(1),
 		input_micro_usd_per_mtok: z.number().int().nonnegative(),
+		// Nullable (migration 003_provider_pricing.sql): set only for
+		// providers that price cache-hit input separately, e.g. DeepSeek.
+		// Defaulting preserves custom pricing files written before step 9.
+		cached_input_micro_usd_per_mtok: z
+			.number()
+			.int()
+			.nonnegative()
+			.nullable()
+			.default(null),
 		output_micro_usd_per_mtok: z.number().int().nonnegative(),
 		effective_from: z.iso.date(),
 	})
@@ -103,18 +112,21 @@ export async function seedPricing({
 				provider,
 				model,
 				input_micro_usd_per_mtok,
+				cached_input_micro_usd_per_mtok,
 				output_micro_usd_per_mtok,
 				effective_from
 			) VALUES (
 				@provider,
 				@model,
 				@input_micro_usd_per_mtok,
+				@cached_input_micro_usd_per_mtok,
 				@output_micro_usd_per_mtok,
 				@effective_from
 			)
 			ON CONFLICT(model, effective_from) DO UPDATE SET
 				provider = excluded.provider,
 				input_micro_usd_per_mtok = excluded.input_micro_usd_per_mtok,
+				cached_input_micro_usd_per_mtok = excluded.cached_input_micro_usd_per_mtok,
 				output_micro_usd_per_mtok = excluded.output_micro_usd_per_mtok;
 		`);
 

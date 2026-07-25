@@ -1,8 +1,9 @@
 import type Database from "better-sqlite3";
+import type { ProviderName } from "./types.js";
 
 export interface CurrentModelRow {
 	model: string;
-	provider: "openai" | "anthropic";
+	provider: ProviderName;
 	/** Unix seconds derived from the model's earliest-ever `effective_from` date. */
 	created: number;
 }

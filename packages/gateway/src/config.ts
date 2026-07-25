@@ -6,6 +6,8 @@ const Env = z.object({
 	ADMIN_TOKEN: z.string().min(16),
 	ANTHROPIC_API_KEY: z.string().optional(),
 	OPENAI_API_KEY: z.string().optional(),
+	GEMINI_API_KEY: z.string().optional(), // optional at boot, per §3.1's step 9 foundation — Gemini routing/adapter land in step 11
+	DEEPSEEK_API_KEY: z.string().optional(), // optional at boot — DeepSeek routing/adapter land in step 10
 	CACHE_TTL_HOURS: z.coerce.number().default(24),
 	DEFAULT_MAX_TOKENS: z.coerce.number().default(1024),
 	// Request body hardening (IMPLEMENTATION_GUIDE.md §12): /v1 body size cap

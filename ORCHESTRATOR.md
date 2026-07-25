@@ -52,8 +52,8 @@ Hard routing rules:
 | Work | Primary | Support / review | Why |
 |---|---|---|---|
 | Phase 0 — Scaffold | GPT-5.3-Codex-Spark / xhigh | GPT-5.6 Terra / medium for migration runner, native-module Docker build, final integration | Most steps are exact scaffolding with loud failures; DB/Docker integration needs broader tool reasoning. |
-| Phase 1 — OpenAI passthrough | Claude Sonnet 5 / high | Spark / xhigh for routine endpoint and test boilerplate; Luna / medium for structured pricing candidates | Retains an Anthropic owner for auth, error mapping, metering, and logging; Sonnet's effort floor applies. |
-| Phase 2 — Anthropic + streaming | Claude Opus 4.8 / xhigh | Luna / medium for fixture sanitation; GPT-5.6 Sol / xhigh at checkpoint A | Cross-format streaming, usage, abort, and retry paths have quiet failure modes; cross-provider review adds independence. |
+| Phase 1 — OpenAI-compatible non-streaming | Claude Sonnet 5 / high | Spark / xhigh for routine endpoint/test boilerplate; Luna / medium for structured pricing candidates; Sol / xhigh for four-provider correctness deviations | Retains an Anthropic owner for auth, error mapping, metering, logging, and the human-approved Gemini/DeepSeek expansion; Sonnet's effort floor applies. |
+| Phase 2 — Anthropic + four-provider streaming | Claude Opus 4.8 / xhigh | Luna / medium for fixture sanitation; GPT-5.6 Sol / xhigh at checkpoint A | Cross-format streaming, usage, abort, retry, and cache-aware metering paths have quiet failure modes; cross-provider review adds independence. |
 | Phase 3 — Cache, limits, budgets | GPT-5.6 Terra / high | GPT-5.6 Sol / xhigh for reserve/reconcile budget logic and pipeline invariants | Terra owns specified feature work; Sol concentrates on concurrency and hard-cap correctness. |
 | Phase 4 — Prompt registry | GPT-5.6 Terra / high | Spark / xhigh for the template engine and routine admin/test boilerplate | CRUD is specified, while transaction and label-resolution semantics still need a strong phase owner. |
 | Phase 5 — Eval harness | Claude Opus 4.8 / xhigh | Spark / xhigh for CLI scaffold; Luna / medium for dataset normalization; Fable 5 / high for synthetic expansion | The gate's assertion, persistence, paired-baseline, and exit-code contracts need deep correctness; dataset generation remains independent judgment. |
@@ -88,7 +88,7 @@ Evaluated question: *should a frontier model review for pathway clarification/re
 
 Reasoning: every phase already ends with an objective verify block (literal commands, expected outputs) and a human approval gate. Frontier review is reserved for seams where mistakes are architectural or compound downstream.
 
-**Fixed checkpoint A — after phase 2, Sol / xhigh.** The provider seam is now frozen: adapter interface, streaming translation, metering. Sol confirms the seam honors GUIDE §3.2–§3.5 and that phases 3–4 remain valid against the code as written.
+**Fixed checkpoint A — after phase 2, Sol / xhigh.** The four-provider seam is now frozen: adapter interface, provider-specific non-streaming/streaming translation, ordinary and cache-aware metering. Sol confirms all four code paths honor GUIDE §3.1–§3.5, audits the explicit live/deferred activation matrix, and confirms phases 3–4 remain valid against the code as written.
 
 **Fixed checkpoint B — after phase 5, split review.** Sol / xhigh audits assertion semantics, the GUIDE §7.2 exit-code contract, paired-baseline math, persistence, and meta-test evidence. Fable / high then judges whether the golden dataset actually discriminates (would a degraded prompt fail?) and issues the final pathway verdict.
 
@@ -105,11 +105,13 @@ At the end of each phase:
 3. If this phase ends at a pathway checkpoint (after phase 2, after phase 5, or an event trigger — see Pathway reviews), run the assigned Sol/Fable review now and attach its verdict.
 4. Present evidence to the human (commands run, outputs, `requests` rows, screenshots for UI phases, pathway verdict if any) and **wait for explicit approval before starting the next phase.** No exceptions — including phase 0.
 
+The human-approved 2026-07-25 provider amendment permits an explicit **available-key live matrix** in phase verify blocks: every implemented provider whose key is configured must be called; every missing-key activation check must be named as deferred with its reason and must never be described as live-green. Offline parity tests and all non-live acceptance criteria still apply to every approved provider. This exception does not waive the locked OpenAI judge prerequisite in phase 5 or CI requirements in phase 6.
+
 ## Blocking conditions — stop and ask, never guess
 
 - **`TODO(verify)` items** (external repos): resolving them needs `Archive/carematch_ai` or `Finished/web_builder_llm`. Ask the human for access or for the answers; record the resolution in `PROGRESS.md`. An unresolved item blocks **only the phase that consumes it** (each is tagged with its phase in `PROGRESS.md`) — earlier phases proceed normally.
 - **`TODO(build-time)` items**: current model names and prices. Propose candidates from the providers' live pricing/docs pages, show them to the human, get confirmation before seeding `pricing.json`.
-- **Secrets**: never generate, hardcode, or commit API keys. Ask the human to place them in `.env` (gitignored). If `.env.example` and reality drift, fix `.env.example`.
+- **Secrets**: never generate, hardcode, or commit API keys. Ask the human to place them in `.env` (gitignored). Provider keys are optional at boot; their absence blocks only that provider's bounded live activation check unless a later phase explicitly requires it (notably the locked OpenAI judge in phase 5). If `.env.example` and reality drift, fix `.env.example`.
 - **Anything the spec doesn't cover**: if a step forces a choice the guide/playbook doesn't answer (naming, minor library, edge-case behavior), pick the smallest-surprise option, but log it in `PROGRESS.md` → Decision log with one line of rationale. If the choice is architectural (affects schema, API contract, or a locked decision), stop and ask instead.
 
 ## Deviations
@@ -123,7 +125,7 @@ If a playbook step turns out to be wrong or a better approach exists:
 ## Spend and safety rails
 
 - Live provider calls only in phase verify blocks and eval runs — never in tests (§11) and never in loops you haven't bounded.
-- Before the first live call of a session, confirm both provider keys are the human's intended accounts.
+- Before the first live call of a session, confirm every configured provider key targeted by that verify block belongs to the human's intended account. Never print key values.
 - Eval/CI traffic always uses a budget-capped PromptGate key (the gateway is the circuit breaker — $1 for CI, per playbook phase 6).
 - Contract tests (`contract-nightly.yml`) run on schedule, not by you, unless the human asks.
 
@@ -138,5 +140,5 @@ If a playbook step turns out to be wrong or a better approach exists:
 
 - Skip or reorder phases (7 before 5 is explicitly forbidden).
 - Mark a `PROGRESS.md` item done without its verify output.
-- Widen scope: no multi-tenancy, no extra providers, no SaaS features — the scope guard in the idea file is a wall, and stretch items (playbook phase S) need the human to green-light each one.
+- Widen scope: no multi-tenancy, no providers beyond the approved four, no SaaS features — the scope guard in the idea file is a wall, and Ollama or any other stretch provider (playbook phase S) needs a separate human green light.
 - Refactor beyond the current step's blast radius. Note refactor ideas in `PROGRESS.md` → Backlog instead.
