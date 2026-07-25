@@ -31,11 +31,13 @@ export const ReasoningEffortSchema = z.enum([
 ]);
 export type ReasoningEffort = z.infer<typeof ReasoningEffortSchema>;
 
+/** OpenAI-compatible finish reasons accepted across the four provider adapters. */
 export const FinishReasonSchema = z.enum([
 	"stop",
 	"length",
 	"tool_calls",
 	"content_filter",
 	"function_call",
+	"insufficient_system_resource",
 ]);
 export type FinishReason = z.infer<typeof FinishReasonSchema>;

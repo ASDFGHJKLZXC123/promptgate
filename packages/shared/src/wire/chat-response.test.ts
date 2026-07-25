@@ -58,6 +58,23 @@ describe("ChatResponseSchema", () => {
 		expect(result.success).toBe(true);
 	});
 
+	test("accepts DeepSeek's documented insufficient_system_resource finish reason", () => {
+		const result = ChatResponseSchema.safeParse({
+			id: "chatcmpl-1",
+			object: "chat.completion",
+			created: 1_700_000_000,
+			model: "deepseek-v4-flash",
+			choices: [
+				{
+					index: 0,
+					message: { role: "assistant", content: "try again" },
+					finish_reason: "insufficient_system_resource",
+				},
+			],
+		});
+		expect(result.success).toBe(true);
+	});
+
 	test("passes through provider-specific extras like system_fingerprint", () => {
 		const result = ChatResponseSchema.safeParse({
 			id: "chatcmpl-1",

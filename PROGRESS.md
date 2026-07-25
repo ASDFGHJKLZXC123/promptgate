@@ -2,10 +2,10 @@
 
 > Maintained by the orchestrator (see `ORCHESTRATOR.md`). Updated after every step. Humans: the Position line is always the truth.
 
-**Position:** Phase 0 — done and human-approved; Phase 1, step 10 — not started
-**Last session:** 2026-07-25 — completed the human-approved Phase 1 step 9 four-provider config/pricing/metering foundation and synchronized every authority document
-**Repo state at last update:** provider taxonomy/config/pricing now covers OpenAI, Anthropic, Gemini, and DeepSeek; migration 003 preserves existing prices while adding optional cache-hit input rates; no Gemini/DeepSeek adapter or route exists yet
-**Last commit:** phase-1 step-9 (this commit) · **Last green `pnpm lint && pnpm test`:** 2026-07-25 (18 test files, 155 tests passed)
+**Position:** Phase 0 — done and human-approved; Phase 1, step 11 — not started
+**Last session:** 2026-07-25 — completed Phase 1 step 10 DeepSeek non-streaming support under Claude Sonnet 5 / high ownership with GPT-5.6 Sol / xhigh audit
+**Repo state at last update:** OpenAI and DeepSeek now share a narrow, Zod-validated OpenAI-compatible transport core; the DeepSeek wrapper is fully offline-tested but intentionally not registered or routable until step 12
+**Last commit:** phase-1 step-10 (this commit) · **Last green `pnpm lint && pnpm test`:** 2026-07-25 (19 test files, 169 tests passed)
 
 ## Phase status
 
@@ -14,7 +14,7 @@ Model/effort per ORCHESTRATOR.md → Model & effort assignment.
 | Phase | Name | Implementer | Status | Verify evidence | Approved by human |
 |---|---|---|---|---|---|
 | 0 | Scaffold | GPT-5.3-Codex-Spark / xhigh; Terra / medium for DB+Docker | done | `docs/evidence/phase-0.md` | project owner — 2026-07-16 |
-| 1 | OpenAI-compatible non-streaming | Claude Sonnet 5 / high; Spark+Luna support; Sol / xhigh expansion audit | in progress (step 10) | — | — |
+| 1 | OpenAI-compatible non-streaming | Claude Sonnet 5 / high; Spark+Luna support; Sol / xhigh expansion audit | in progress (step 11) | — | — |
 | 2 | Anthropic + four-provider streaming | Claude Opus 4.8 / xhigh; Luna fixtures; Sol / xhigh checkpoint | not started | — | — |
 | 3 | Cache, limits, budgets | GPT-5.6 Terra / high; Sol / xhigh budget audit | not started | — | — |
 | 4 | Prompt registry | GPT-5.6 Terra / high; Spark support | not started | — | — |
@@ -64,6 +64,7 @@ Small choices the spec didn't cover (architectural ones go to the human instead 
 
 | Date | Decision | Rationale |
 |---|---|---|
+| 2026-07-25 | Extracted a narrow configurable OpenAI-compatible HTTP core for the officially compatible OpenAI and DeepSeek wrappers; provider-specific modules still own endpoint, credential, name, and error identity. Added DeepSeek's documented `insufficient_system_resource` finish reason to the shared validated response contract. | This removes duplicated auth/stripping/retry/schema logic without pretending every provider is interchangeable. Unknown caller fields, including DeepSeek `thinking`, remain verbatim passthrough; successful responses still fail loud at the Zod boundary. Sol / xhigh found the provider-specific finish-reason gap, which was fixed with adapter and shared-schema regression tests before approval. |
 | 2026-07-25 | Applied the project-owner-approved decision #2 amendment from two to four providers: OpenAI, Anthropic, Gemini, and DeepSeek. Phase 1 adds DeepSeek/Gemini non-streaming in steps 10–12; Phase 2 provides streaming parity across all four. Phase verify blocks call every configured implemented provider and name missing-key activation checks as deferred, never live-green. | The owner currently has workable Gemini/DeepSeek credentials but not OpenAI/Anthropic credentials. This preserves forward support without blocking current gateway proof; it does not amend the locked `gpt-5.6-terra` judge, so a working OpenAI key remains a future Phase 5 prerequisite rather than a Phase 1 blocker. Fable 5 / high was attempted but unavailable because of usage credits; GPT-5.6 Sol / xhigh supplied the technical expansion audit before human approval. |
 | 2026-07-25 | Added nullable `model_pricing.cached_input_micro_usd_per_mtok` in migration 003, renumbered the still-uncommitted registry/eval migrations to 004/005, and defined validated DeepSeek cache usage plus three-component rounding (cache-hit input, cache-miss input, output). Older pricing JSON may omit the new field and normalizes it to `null`. | DeepSeek publishes separate cache-hit and cache-miss input prices, so one input rate cannot produce exact cost. A new additive migration upgrades both fresh and already-applied databases without rewriting 001/002; independently rounded integer micro-USD components preserve the approved no-floating-money rule. |
 | 2026-07-17 | Made `GET /v1/models` return the current official OpenAI list envelope with one deterministically ordered row per model that has a currently effective price; `owned_by` comes from the latest effective provider row and `created` is stable Unix seconds from the earliest pricing date. | Official OpenAI OpenAPI was checked at build time; sourcing the endpoint exclusively through a DAO keeps provider keys optional, avoids network calls, excludes future-only routes, and prevents price-history duplicates. Claude Sonnet 5 / high owned the implementation. |
@@ -96,6 +97,7 @@ Small choices the spec didn't cover (architectural ones go to the human instead 
 
 | Date | Covered | Ended at |
 |---|---|---|
+| 2026-07-25 | Phase 1 step 10 — narrow OpenAI-compatible transport extraction with all prior OpenAI tests unchanged; DeepSeek non-streaming endpoint/auth/config/error/retry/abort behavior; verbatim `thinking` passthrough; validated cache usage and provider-specific finish reason; explicit Phase 2 stream stub; 49 focused tests, 14 new tests, 169 total tests, lint, and build. Claude Sonnet 5 / high implemented the bounded step; GPT-5.6 Sol / xhigh returned changes-required on the missing finish reason and approved the corrected remainder. | Phase 1, step 11 — not started |
 | 2026-07-25 | Phase 1 step 9 — human-approved four-provider authority amendment; optional Gemini/DeepSeek boot config; approved Gemini/DeepSeek prices; additive cache-rate migration with legacy preservation; Zod-validated paired cache usage; exact cache-hit/cache-miss/output metering; pricing/DAO compatibility; 16 focused test additions, 155 total tests, lint, and build. Claude Sonnet 5 / high produced the bounded draft but did not return before the orchestration cap; GPT-5.6 Sol / xhigh independently audited the integrated result. | Phase 1, step 10 — not started |
 | 2026-07-17 | Phase 1 step 8 — authenticated DAO-backed `GET /v1/models`, current date-effective distinct rows, exact official OpenAI list envelope, deterministic ordering, offline provider/network guardrails, 16 focused tests, 139 total tests, and build under Claude Sonnet 5 / high ownership | Phase 1 — verify pending |
 | 2026-07-17 | Phase 1 step 7 — human-approved Fable request-identity correction, migration 002 with legacy upgrade proof, non-streaming authenticated chat route, injected providers, exact/estimated metering, UUID/cost/cache headers, bounded body/upstream limits, post-response request logging, safe error mapping, 27 focused tests, 123 total tests, build, and Sonnet 5 / high `APPROVE` | Phase 1, step 8 — not started |
