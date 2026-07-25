@@ -2,10 +2,10 @@
 
 > Maintained by the orchestrator (see `ORCHESTRATOR.md`). Updated after every step. Humans: the Position line is always the truth.
 
-**Position:** Phase 0 — done and human-approved; Phase 1, step 12 — not started
-**Last session:** 2026-07-25 — completed Phase 1 step 11 Gemini non-streaming support under Claude Sonnet 5 / high ownership with GPT-5.6 Sol / xhigh audit
-**Repo state at last update:** OpenAI, DeepSeek, and Gemini now have provider-specific wrappers over the Zod-validated compatible core; Gemini's 408 retry is isolated, and neither new adapter is registered or routable until step 12
-**Last commit:** phase-1 step-11 (this commit) · **Last green `pnpm lint && pnpm test`:** 2026-07-25 (20 test files, 186 tests passed)
+**Position:** Phase 0 — done and human-approved; Phase 1 — verify pending
+**Last session:** 2026-07-25 — completed Phase 1 step 12 four-provider integration under Claude Sonnet 5 / high ownership with GPT-5.6 Sol / xhigh audit
+**Repo state at last update:** OpenAI, Gemini, and DeepSeek non-streaming adapters are prefix-routed, pricing-guarded, and default-wired; Anthropic remains deliberately unimplemented until Phase 2; `/v1/models` remains key-independent and network-free
+**Last commit:** phase-1 step-12 (this commit) · **Last green `pnpm lint && pnpm test`:** 2026-07-25 (20 test files, 196 tests passed)
 
 ## Phase status
 
@@ -14,7 +14,7 @@ Model/effort per ORCHESTRATOR.md → Model & effort assignment.
 | Phase | Name | Implementer | Status | Verify evidence | Approved by human |
 |---|---|---|---|---|---|
 | 0 | Scaffold | GPT-5.3-Codex-Spark / xhigh; Terra / medium for DB+Docker | done | `docs/evidence/phase-0.md` | project owner — 2026-07-16 |
-| 1 | OpenAI-compatible non-streaming | Claude Sonnet 5 / high; Spark+Luna support; Sol / xhigh expansion audit | in progress (step 12) | — | — |
+| 1 | OpenAI-compatible non-streaming | Claude Sonnet 5 / high; Spark+Luna support; Sol / xhigh expansion audit | verify pending | — | — |
 | 2 | Anthropic + four-provider streaming | Claude Opus 4.8 / xhigh; Luna fixtures; Sol / xhigh checkpoint | not started | — | — |
 | 3 | Cache, limits, budgets | GPT-5.6 Terra / high; Sol / xhigh budget audit | not started | — | — |
 | 4 | Prompt registry | GPT-5.6 Terra / high; Spark support | not started | — | — |
@@ -64,6 +64,7 @@ Small choices the spec didn't cover (architectural ones go to the human instead 
 
 | Date | Decision | Rationale |
 |---|---|---|
+| 2026-07-25 | Completed the four-provider routing seam by requiring prefix and current pricing provider to agree, default-wiring OpenAI/Gemini/DeepSeek while leaving Anthropic for Phase 2, and keeping `/v1/models` sourced only from current pricing regardless of provider-key availability. Pinned `openai@6.49.0` as a root dev dependency for the literal SDK verification. | Provider/pricing agreement prevents a model from being routed under another provider's rate. Optional keys still permit boot and model discovery; only a call to an unconfigured provider fails. Offline default-wiring, model-list, mismatch, and exact Gemini/DeepSeek metering/logging tests prove the integration without live provider traffic. |
 | 2026-07-25 | Implemented Gemini as a provider-specific wrapper over the compatible core, preserved the documented `extra_body.google` envelope verbatim, and made HTTP 408 an adapter-local addition to the shared 429/5xx retry schedule. | Google's official compatibility and troubleshooting contracts support Bearer auth at the `/v1beta/openai/chat/completions` endpoint and treat 408 as transient. A configurable extra-status list keeps the common retry implementation without silently widening OpenAI/DeepSeek behavior; fake-fetch tests prove both the opt-in and default-off paths. |
 | 2026-07-25 | Extracted a narrow configurable OpenAI-compatible HTTP core for the officially compatible OpenAI and DeepSeek wrappers; provider-specific modules still own endpoint, credential, name, and error identity. Added DeepSeek's documented `insufficient_system_resource` finish reason to the shared validated response contract. | This removes duplicated auth/stripping/retry/schema logic without pretending every provider is interchangeable. Unknown caller fields, including DeepSeek `thinking`, remain verbatim passthrough; successful responses still fail loud at the Zod boundary. Sol / xhigh found the provider-specific finish-reason gap, which was fixed with adapter and shared-schema regression tests before approval. |
 | 2026-07-25 | Applied the project-owner-approved decision #2 amendment from two to four providers: OpenAI, Anthropic, Gemini, and DeepSeek. Phase 1 adds DeepSeek/Gemini non-streaming in steps 10–12; Phase 2 provides streaming parity across all four. Phase verify blocks call every configured implemented provider and name missing-key activation checks as deferred, never live-green. | The owner currently has workable Gemini/DeepSeek credentials but not OpenAI/Anthropic credentials. This preserves forward support without blocking current gateway proof; it does not amend the locked `gpt-5.6-terra` judge, so a working OpenAI key remains a future Phase 5 prerequisite rather than a Phase 1 blocker. Fable 5 / high was attempted but unavailable because of usage credits; GPT-5.6 Sol / xhigh supplied the technical expansion audit before human approval. |
@@ -98,6 +99,7 @@ Small choices the spec didn't cover (architectural ones go to the human instead 
 
 | Date | Covered | Ended at |
 |---|---|---|
+| 2026-07-25 | Phase 1 step 12 — Gemini/DeepSeek prefix routing and default registry wiring; prefix/pricing-provider mismatch rejection; key-independent, no-network four-provider model listing; repository-pinned OpenAI SDK for literal verification; exact Gemini and cache-aware DeepSeek metering plus post-response logging; 50 focused tests, 196 total tests, lint, and build. Claude Sonnet 5 / high implemented the bounded integration; GPT-5.6 Sol / xhigh found only one stale comment, which was corrected before approval. | Phase 1 — verify pending |
 | 2026-07-25 | Phase 1 step 11 — Gemini non-streaming endpoint/Bearer auth/config/error/schema/abort behavior; documented `extra_body.google` passthrough; provider-local 408 retry plus unchanged OpenAI/DeepSeek defaults; explicit Phase 2 stream stub; 56 focused tests, 17 new tests, 186 total tests, lint, and build. Claude Sonnet 5 / high implemented the bounded step; GPT-5.6 Sol / xhigh requested the official extension-envelope regression and documentation corrections before approval. | Phase 1, step 12 — not started |
 | 2026-07-25 | Phase 1 step 10 — narrow OpenAI-compatible transport extraction with all prior OpenAI tests unchanged; DeepSeek non-streaming endpoint/auth/config/error/retry/abort behavior; verbatim `thinking` passthrough; validated cache usage and provider-specific finish reason; explicit Phase 2 stream stub; 49 focused tests, 14 new tests, 169 total tests, lint, and build. Claude Sonnet 5 / high implemented the bounded step; GPT-5.6 Sol / xhigh returned changes-required on the missing finish reason and approved the corrected remainder. | Phase 1, step 11 — not started |
 | 2026-07-25 | Phase 1 step 9 — human-approved four-provider authority amendment; optional Gemini/DeepSeek boot config; approved Gemini/DeepSeek prices; additive cache-rate migration with legacy preservation; Zod-validated paired cache usage; exact cache-hit/cache-miss/output metering; pricing/DAO compatibility; 16 focused test additions, 155 total tests, lint, and build. Claude Sonnet 5 / high produced the bounded draft but did not return before the orchestration cap; GPT-5.6 Sol / xhigh independently audited the integrated result. | Phase 1, step 10 — not started |

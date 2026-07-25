@@ -23,7 +23,7 @@ import {
 	type RequestLogStatus,
 } from "./requests.dao.js";
 
-/** Adapters actually wired up for this process — phase 1 only populates `openai`. */
+/** Adapters actually wired for this process; Anthropic remains unimplemented until Phase 2. */
 export type ProviderAdapterRegistry = Partial<
 	Record<ProviderName, ProviderAdapter>
 >;

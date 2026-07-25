@@ -108,6 +108,26 @@ async function buildServer() {
 	return buildServer();
 }
 
+function fakeUpstreamResponse(model: string): Response {
+	return new Response(
+		JSON.stringify({
+			id: "chatcmpl-wiring-test",
+			object: "chat.completion",
+			created: 0,
+			model,
+			choices: [
+				{
+					index: 0,
+					message: { role: "assistant", content: "hello" },
+					finish_reason: "stop",
+				},
+			],
+			usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+		}),
+		{ status: 200, headers: { "content-type": "application/json" } },
+	);
+}
+
 test("boots with all four provider keys absent and returns a healthy response", async () => {
 	for (const keyName of PROVIDER_KEY_NAMES) {
 		expect(process.env[keyName]).toBeUndefined();
@@ -393,6 +413,103 @@ test("POST /admin/api/keys wraps malformed JSON in the OpenAI error envelope", a
 		});
 	} finally {
 		await server.close();
+	}
+});
+
+test("default adapter wiring selects Gemini and DeepSeek adapters, calling only a stubbed global fetch (BUILD_PLAYBOOK.md phase 1 step 12)", async () => {
+	process.env.GEMINI_API_KEY = "test-gemini-key";
+	process.env.DEEPSEEK_API_KEY = "test-deepseek-key";
+	await vi.resetModules();
+
+	const fetchMock = vi.fn(
+		async (url: string | URL | Request, _init?: RequestInit) => {
+			const href =
+				typeof url === "string" ? url : url instanceof URL ? url.href : url.url;
+			if (
+				href ===
+				"https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
+			) {
+				return fakeUpstreamResponse("gemini-2.5-flash-lite");
+			}
+			if (href === "https://api.deepseek.com/v1/chat/completions") {
+				return fakeUpstreamResponse("deepseek-v4-flash");
+			}
+			throw new Error(`unexpected fetch to ${href}`);
+		},
+	);
+	vi.stubGlobal("fetch", fetchMock);
+
+	const server = await buildServer();
+	const db = openTestDb();
+
+	try {
+		db.prepare(
+			`INSERT INTO model_pricing (provider, model, input_micro_usd_per_mtok, output_micro_usd_per_mtok, effective_from)
+			 VALUES ('gemini', 'gemini-2.5-flash-lite', 100000, 400000, '2020-01-01')`,
+		).run();
+		db.prepare(
+			`INSERT INTO model_pricing (provider, model, input_micro_usd_per_mtok, output_micro_usd_per_mtok, effective_from)
+			 VALUES ('deepseek', 'deepseek-v4-flash', 140000, 280000, '2020-01-01')`,
+		).run();
+
+		const keyResponse = await server.inject({
+			method: "POST",
+			url: "/admin/api/keys",
+			headers: adminHeaders(),
+			body: JSON.stringify({ name: "wiring-test-key" }),
+		});
+		const { plaintext_key } = keyResponse.json() as { plaintext_key: string };
+		const clientHeaders = {
+			authorization: `Bearer ${plaintext_key}`,
+			"content-type": "application/json",
+		};
+
+		const geminiResponse = await server.inject({
+			method: "POST",
+			url: "/v1/chat/completions",
+			headers: clientHeaders,
+			body: JSON.stringify({
+				model: "gemini-2.5-flash-lite",
+				messages: [{ role: "user", content: "hi" }],
+			}),
+		});
+		const deepseekResponse = await server.inject({
+			method: "POST",
+			url: "/v1/chat/completions",
+			headers: clientHeaders,
+			body: JSON.stringify({
+				model: "deepseek-v4-flash",
+				messages: [{ role: "user", content: "hi" }],
+			}),
+		});
+
+		expect(geminiResponse.statusCode).toBe(200);
+		expect(deepseekResponse.statusCode).toBe(200);
+		expect(fetchMock).toHaveBeenCalledTimes(2);
+
+		const [geminiUrl, geminiInit] = fetchMock.mock.calls[0] as [
+			string,
+			RequestInit,
+		];
+		expect(geminiUrl).toBe(
+			"https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
+		);
+		expect(geminiInit.headers).toMatchObject({
+			authorization: "Bearer test-gemini-key",
+		});
+
+		const [deepseekUrl, deepseekInit] = fetchMock.mock.calls[1] as [
+			string,
+			RequestInit,
+		];
+		expect(deepseekUrl).toBe("https://api.deepseek.com/v1/chat/completions");
+		expect(deepseekInit.headers).toMatchObject({
+			authorization: "Bearer test-deepseek-key",
+		});
+	} finally {
+		db.close();
+		await server.close();
+		vi.unstubAllGlobals();
 	}
 });
 

@@ -9,7 +9,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 import { openDatabase } from "../db/index.js";
 import { migrate } from "../db/migrate.js";
-import type { ProviderAdapter } from "../providers/types.js";
+import type { ProviderAdapter, ProviderName } from "../providers/types.js";
 
 interface OpenAIErrorResponse {
 	error: { message: string; type: string; code: string };
@@ -128,14 +128,17 @@ function seedPricing(
 	model: string,
 	inputRate: number,
 	outputRate: number,
+	options: { provider?: ProviderName; cachedInputRate?: number } = {},
 ): void {
 	db.prepare(
-		`INSERT INTO model_pricing (provider, model, input_micro_usd_per_mtok, output_micro_usd_per_mtok, effective_from)
-		 VALUES (@provider, @model, @input_rate, @output_rate, '2020-01-01')`,
+		`INSERT INTO model_pricing (
+			provider, model, input_micro_usd_per_mtok, cached_input_micro_usd_per_mtok, output_micro_usd_per_mtok, effective_from
+		) VALUES (@provider, @model, @input_rate, @cached_input_rate, @output_rate, '2020-01-01')`,
 	).run({
-		provider: "openai",
+		provider: options.provider ?? "openai",
 		model,
 		input_rate: inputRate,
+		cached_input_rate: options.cachedInputRate ?? null,
 		output_rate: outputRate,
 	});
 }
@@ -165,12 +168,13 @@ interface FakeAdapterHandle {
 
 function fakeAdapter(
 	complete: (req: ChatRequest, signal: AbortSignal) => Promise<ChatResponse>,
+	name: ProviderName = "openai",
 ): FakeAdapterHandle {
 	const calls: ChatRequest[] = [];
 	return {
 		calls,
 		adapter: {
-			name: "openai",
+			name,
 			async complete(req, signal) {
 				calls.push(req);
 				return complete(req, signal);
@@ -183,7 +187,7 @@ function fakeAdapter(
 }
 
 async function buildTestServer(
-	adapters: Partial<Record<"openai" | "anthropic", ProviderAdapter>>,
+	adapters: Partial<Record<ProviderName, ProviderAdapter>>,
 ): Promise<FastifyInstance> {
 	const { buildServer } = await import("../server.js");
 	return buildServer({ adapters });
@@ -780,6 +784,174 @@ describe("POST /v1/chat/completions — logging lifecycle", () => {
 			await server.close();
 			db.close();
 			vi.doUnmock("node:crypto");
+		}
+	});
+});
+
+describe("POST /v1/chat/completions — Gemini and DeepSeek routing (BUILD_PLAYBOOK.md phase 1 step 12)", () => {
+	test("routes a gemini- model to the injected Gemini fake adapter and meters exact cost/log", async () => {
+		const db = openTestDb();
+		seedApiKey(db);
+		// $1.50/Mtok in, $2.50/Mtok out — same rounding-forcing rates as the
+		// OpenAI exact-cost test above (round(1.5)=2, round(2.5)=3, total 5).
+		seedPricing(db, "gemini-test-exact", 1_500_000, 2_500_000, {
+			provider: "gemini",
+		});
+
+		const { adapter, calls } = fakeAdapter(
+			async () =>
+				fakeChatResponse({
+					model: "gemini-test-exact",
+					usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+				}),
+			"gemini",
+		);
+		const server = await buildTestServer({ gemini: adapter });
+
+		try {
+			const response = await server.inject({
+				method: "POST",
+				url: "/v1/chat/completions",
+				headers: authHeaders(),
+				body: JSON.stringify({
+					model: "gemini-test-exact",
+					messages: [{ role: "user", content: "say hi" }],
+				}),
+			});
+
+			expect(response.statusCode).toBe(200);
+			expect(calls).toHaveLength(1);
+			expect(response.headers["x-pg-cost-usd"]).toBe("0.000005");
+
+			await new Promise((resolve) => setTimeout(resolve, 20));
+			const requestId = response.headers["x-pg-request-id"] as string;
+			const row = db
+				.prepare("SELECT * FROM requests WHERE request_id = ?")
+				.get(requestId) as RequestsRow;
+
+			expect(row.provider).toBe("gemini");
+			expect(row.model).toBe("gemini-test-exact");
+			expect(row.input_tokens).toBe(1);
+			expect(row.output_tokens).toBe(1);
+			expect(row.cost_micro_usd).toBe(5);
+			expect(row.cost_estimated).toBe(0);
+			expect(row.status).toBe("ok");
+		} finally {
+			await server.close();
+			db.close();
+		}
+	});
+
+	test("routes a deepseek- model to the injected DeepSeek fake adapter and meters exact cache-hit/cache-miss/output cost/log", async () => {
+		const db = openTestDb();
+		seedApiKey(db);
+		// input (cache-miss) 140000, cached input (cache-hit) 2800, output
+		// 280000 micro-USD/Mtok — the human-approved DeepSeek rates
+		// (IMPLEMENTATION_GUIDE.md §3.5's step 9 amendment). With
+		// cache_hit_tokens=1000, cache_miss_tokens=2000, output_tokens=500:
+		// round(1000*2800/1e6)=3, round(2000*140000/1e6)=280,
+		// round(500*280000/1e6)=140 -> total 423.
+		seedPricing(db, "deepseek-test-cache", 140_000, 280_000, {
+			provider: "deepseek",
+			cachedInputRate: 2_800,
+		});
+
+		const { adapter, calls } = fakeAdapter(
+			async () =>
+				fakeChatResponse({
+					model: "deepseek-test-cache",
+					usage: {
+						prompt_tokens: 3_000,
+						completion_tokens: 500,
+						total_tokens: 3_500,
+						prompt_cache_hit_tokens: 1_000,
+						prompt_cache_miss_tokens: 2_000,
+					},
+				}),
+			"deepseek",
+		);
+		const server = await buildTestServer({ deepseek: adapter });
+
+		try {
+			const response = await server.inject({
+				method: "POST",
+				url: "/v1/chat/completions",
+				headers: authHeaders(),
+				body: JSON.stringify({
+					model: "deepseek-test-cache",
+					messages: [{ role: "user", content: "say hi" }],
+				}),
+			});
+
+			expect(response.statusCode).toBe(200);
+			expect(calls).toHaveLength(1);
+			expect(response.headers["x-pg-cost-usd"]).toBe("0.000423");
+
+			await new Promise((resolve) => setTimeout(resolve, 20));
+			const requestId = response.headers["x-pg-request-id"] as string;
+			const row = db
+				.prepare("SELECT * FROM requests WHERE request_id = ?")
+				.get(requestId) as RequestsRow;
+
+			expect(row.provider).toBe("deepseek");
+			expect(row.model).toBe("deepseek-test-cache");
+			expect(row.input_tokens).toBe(3_000);
+			expect(row.output_tokens).toBe(500);
+			expect(row.cost_micro_usd).toBe(423);
+			expect(row.cost_estimated).toBe(0);
+			expect(row.status).toBe("ok");
+		} finally {
+			await server.close();
+			db.close();
+		}
+	});
+
+	test("rejects a model priced under a mismatched provider as unknown_model without invoking any adapter", async () => {
+		const db = openTestDb();
+		seedApiKey(db);
+		// Priced as "openai" despite the gemini- prefix — routes.ts must
+		// reject this rather than route it to either adapter.
+		seedPricing(db, "gemini-mismatched-model", 1_000_000, 2_000_000, {
+			provider: "openai",
+		});
+
+		const { adapter: geminiAdapter, calls: geminiCalls } = fakeAdapter(
+			async () => fakeChatResponse(),
+			"gemini",
+		);
+		const { adapter: openaiAdapter, calls: openaiCalls } = fakeAdapter(
+			async () => fakeChatResponse(),
+			"openai",
+		);
+		const server = await buildTestServer({
+			gemini: geminiAdapter,
+			openai: openaiAdapter,
+		});
+
+		try {
+			const response = await server.inject({
+				method: "POST",
+				url: "/v1/chat/completions",
+				headers: authHeaders(),
+				body: JSON.stringify({
+					model: "gemini-mismatched-model",
+					messages: [{ role: "user", content: "hi" }],
+				}),
+			});
+
+			expect(response.statusCode).toBe(400);
+			expect(response.json()).toEqual({
+				error: {
+					message: 'Unknown model: "gemini-mismatched-model".',
+					type: "invalid_request_error",
+					code: "unknown_model",
+				},
+			});
+			expect(geminiCalls).toHaveLength(0);
+			expect(openaiCalls).toHaveLength(0);
+		} finally {
+			await server.close();
+			db.close();
 		}
 	});
 });

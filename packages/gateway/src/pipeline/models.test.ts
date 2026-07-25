@@ -8,7 +8,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 import { openDatabase } from "../db/index.js";
 import { migrate } from "../db/migrate.js";
-import type { ProviderAdapter } from "../providers/types.js";
+import type { ProviderAdapter, ProviderName } from "../providers/types.js";
 
 interface OpenAIErrorResponse {
 	error: { message: string; type: string; code: string };
@@ -104,7 +104,7 @@ function seedApiKey(db: Database.Database, hash: string, disabled = 0): void {
 }
 
 interface SeedPricingRow {
-	provider: "openai" | "anthropic";
+	provider: ProviderName;
 	model: string;
 	effective_from: string;
 }
@@ -117,8 +117,8 @@ function seedPricing(db: Database.Database, row: SeedPricingRow): void {
 	).run(row);
 }
 
-/** No test in this file wires phase-2+ adapters — a throwing stub proves no provider is ever invoked. */
-function unreachableAdapter(name: "openai" | "anthropic"): ProviderAdapter {
+/** No test in this file invokes a provider adapter — a throwing stub proves no provider is ever called. */
+function unreachableAdapter(name: ProviderName): ProviderAdapter {
 	return {
 		name,
 		async complete() {
@@ -136,6 +136,8 @@ async function buildTestServer(): Promise<FastifyInstance> {
 		adapters: {
 			openai: unreachableAdapter("openai"),
 			anthropic: unreachableAdapter("anthropic"),
+			gemini: unreachableAdapter("gemini"),
+			deepseek: unreachableAdapter("deepseek"),
 		},
 	});
 }
@@ -372,6 +374,67 @@ describe("GET /v1/models — distinctness, exclusion, and ordering", () => {
 		const expectedOrder = ["claude-sonnet-5", "gpt-5.6-luna", "gpt-5.6-terra"];
 		expect(first).toEqual(expectedOrder);
 		expect(second).toEqual(expectedOrder);
+
+		await server.close();
+	});
+
+	test("includes Gemini and DeepSeek alongside other current priced rows, in deterministic model-id order (BUILD_PLAYBOOK.md phase 1 step 12)", async () => {
+		const db = openTestDb();
+		seedApiKey(db, KEY_HASH);
+		seedPricing(db, {
+			provider: "openai",
+			model: "gpt-5.6-luna",
+			effective_from: "2020-01-01",
+		});
+		seedPricing(db, {
+			provider: "anthropic",
+			model: "claude-sonnet-5",
+			effective_from: "2020-01-01",
+		});
+		seedPricing(db, {
+			provider: "gemini",
+			model: "gemini-2.5-flash-lite",
+			effective_from: "2020-01-01",
+		});
+		seedPricing(db, {
+			provider: "deepseek",
+			model: "deepseek-v4-flash",
+			effective_from: "2020-01-01",
+		});
+		db.close();
+		const server = await buildTestServer();
+
+		const response = await server.inject({
+			method: "GET",
+			url: "/v1/models",
+			headers: { authorization: `Bearer ${PLAINTEXT_KEY}` },
+		});
+		const body = response.json() as ModelsListResponse;
+
+		expect(response.statusCode).toBe(200);
+		expect(body.data.map((model) => model.id)).toEqual([
+			"claude-sonnet-5",
+			"deepseek-v4-flash",
+			"gemini-2.5-flash-lite",
+			"gpt-5.6-luna",
+		]);
+		expect(
+			body.data.find((model) => model.id === "gemini-2.5-flash-lite"),
+		).toEqual({
+			id: "gemini-2.5-flash-lite",
+			object: "model",
+			created: unixSecondsOf("2020-01-01"),
+			owned_by: "gemini",
+		});
+		expect(body.data.find((model) => model.id === "deepseek-v4-flash")).toEqual(
+			{
+				id: "deepseek-v4-flash",
+				object: "model",
+				created: unixSecondsOf("2020-01-01"),
+				owned_by: "deepseek",
+			},
+		);
+		expect(fetch).not.toHaveBeenCalled();
 
 		await server.close();
 	});

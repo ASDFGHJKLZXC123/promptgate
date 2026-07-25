@@ -7,12 +7,13 @@ import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import { openDatabase } from "../db/index.js";
 import { migrate } from "../db/migrate.js";
 import { resolveProvider } from "./routes.js";
+import type { ProviderName } from "./types.js";
 
 let tempDbDir: string;
 let db: Database.Database;
 
 interface SeedPricingRow {
-	provider: "openai" | "anthropic";
+	provider: ProviderName;
 	model: string;
 	effective_from: string;
 	input_micro_usd_per_mtok?: number;
@@ -80,6 +81,30 @@ describe("resolveProvider — prefix routing (IMPLEMENTATION_GUIDE.md §3.1)", (
 
 		expect(result).toEqual({ ok: true, provider: "openai" });
 	});
+
+	test("routes a priced gemini- model to gemini", () => {
+		seedPricing({
+			provider: "gemini",
+			model: "gemini-2.5-flash-lite",
+			effective_from: "2026-01-01",
+		});
+
+		const result = resolveProvider(db, "gemini-2.5-flash-lite");
+
+		expect(result).toEqual({ ok: true, provider: "gemini" });
+	});
+
+	test("routes a priced deepseek- model to deepseek", () => {
+		seedPricing({
+			provider: "deepseek",
+			model: "deepseek-v4-flash",
+			effective_from: "2026-01-01",
+		});
+
+		const result = resolveProvider(db, "deepseek-v4-flash");
+
+		expect(result).toEqual({ ok: true, provider: "deepseek" });
+	});
 });
 
 describe("resolveProvider — rejection semantics (IMPLEMENTATION_GUIDE.md §3.1, §3.6)", () => {
@@ -130,6 +155,72 @@ describe("resolveProvider — rejection semantics (IMPLEMENTATION_GUIDE.md §3.1
 			error: {
 				error: {
 					message: 'Unknown model: "claude-future".',
+					type: "invalid_request_error",
+					code: "unknown_model",
+				},
+			},
+		});
+	});
+
+	test("rejects a gpt- prefixed model priced under a different provider as unknown_model", () => {
+		seedPricing({
+			provider: "gemini",
+			model: "gpt-mismatched",
+			effective_from: "2026-01-01",
+		});
+
+		const result = resolveProvider(db, "gpt-mismatched");
+
+		expect(result).toEqual({
+			ok: false,
+			statusCode: 400,
+			error: {
+				error: {
+					message: 'Unknown model: "gpt-mismatched".',
+					type: "invalid_request_error",
+					code: "unknown_model",
+				},
+			},
+		});
+	});
+
+	test("rejects a gemini- prefixed model priced under a different provider as unknown_model", () => {
+		seedPricing({
+			provider: "deepseek",
+			model: "gemini-mismatched",
+			effective_from: "2026-01-01",
+		});
+
+		const result = resolveProvider(db, "gemini-mismatched");
+
+		expect(result).toEqual({
+			ok: false,
+			statusCode: 400,
+			error: {
+				error: {
+					message: 'Unknown model: "gemini-mismatched".',
+					type: "invalid_request_error",
+					code: "unknown_model",
+				},
+			},
+		});
+	});
+
+	test("rejects a deepseek- prefixed model priced under a different provider as unknown_model", () => {
+		seedPricing({
+			provider: "openai",
+			model: "deepseek-mismatched",
+			effective_from: "2026-01-01",
+		});
+
+		const result = resolveProvider(db, "deepseek-mismatched");
+
+		expect(result).toEqual({
+			ok: false,
+			statusCode: 400,
+			error: {
+				error: {
+					message: 'Unknown model: "deepseek-mismatched".',
 					type: "invalid_request_error",
 					code: "unknown_model",
 				},

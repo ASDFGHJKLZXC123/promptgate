@@ -12,14 +12,17 @@ import {
 	registerChatCompletionsRoute,
 } from "./pipeline/handler.js";
 import { registerModelsRoute } from "./pipeline/models.js";
+import { createDeepSeekAdapter } from "./providers/deepseek.js";
+import { createGeminiAdapter } from "./providers/gemini.js";
 import { createOpenAiAdapter } from "./providers/openai.js";
 
 export interface BuildServerOptions {
 	/**
 	 * Provider adapters to wire into the pipeline. Defaults to the real
-	 * OpenAI adapter (keyed by the optional `OPENAI_API_KEY`); tests inject
-	 * fakes here instead so no test ever reaches the network
-	 * (IMPLEMENTATION_GUIDE.md §11). Anthropic has no adapter until phase 2.
+	 * OpenAI, Gemini, and DeepSeek adapters (each keyed by its optional
+	 * `*_API_KEY`); tests inject fakes here instead so no test ever reaches
+	 * the network (IMPLEMENTATION_GUIDE.md §11). Anthropic has no adapter
+	 * until phase 2.
 	 */
 	adapters?: ProviderAdapterRegistry;
 }
@@ -35,6 +38,8 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
 
 	const adapters: ProviderAdapterRegistry = options.adapters ?? {
 		openai: createOpenAiAdapter({ apiKey: config.OPENAI_API_KEY }),
+		gemini: createGeminiAdapter({ apiKey: config.GEMINI_API_KEY }),
+		deepseek: createDeepSeekAdapter({ apiKey: config.DEEPSEEK_API_KEY }),
 	};
 
 	const server = fastify();
