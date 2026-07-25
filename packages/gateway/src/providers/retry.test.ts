@@ -148,6 +148,79 @@ test("tolerates a retryable response with no body to release", async () => {
 	expect(response.status).toBe(200);
 });
 
+test("does not retry 408 by default (extraRetryStatuses omitted)", async () => {
+	const fetch = vi.fn().mockResolvedValue(fakeResponse(408));
+	const deps = makeDeps({ fetch });
+
+	const response = await fetchWithRetry("https://example.test", {}, deps);
+
+	expect(response.status).toBe(408);
+	expect(fetch).toHaveBeenCalledTimes(1);
+	expect(deps.sleep).not.toHaveBeenCalled();
+});
+
+test("retries a status named in extraRetryStatuses and succeeds on the next attempt", async () => {
+	const fetch = vi
+		.fn()
+		.mockResolvedValueOnce(fakeResponse(408))
+		.mockResolvedValueOnce(fakeResponse(200));
+	const deps = makeDeps({ fetch });
+
+	const response = await fetchWithRetry(
+		"https://example.test",
+		{},
+		deps,
+		[408],
+	);
+
+	expect(response.status).toBe(200);
+	expect(fetch).toHaveBeenCalledTimes(2);
+	expect(deps.sleep).toHaveBeenCalledTimes(1);
+});
+
+test("exhausts retries on a status named in extraRetryStatuses after 3 total attempts", async () => {
+	const fetch = vi.fn().mockResolvedValue(fakeResponse(408));
+	const deps = makeDeps({ fetch });
+
+	const response = await fetchWithRetry(
+		"https://example.test",
+		{},
+		deps,
+		[408],
+	);
+
+	expect(response.status).toBe(408);
+	expect(fetch).toHaveBeenCalledTimes(1 + RETRY_BASE_DELAYS_MS.length);
+});
+
+test("extraRetryStatuses does not widen retries to unlisted statuses", async () => {
+	const fetch = vi.fn().mockResolvedValue(fakeResponse(400));
+	const deps = makeDeps({ fetch });
+
+	const response = await fetchWithRetry(
+		"https://example.test",
+		{},
+		deps,
+		[408],
+	);
+
+	expect(response.status).toBe(400);
+	expect(fetch).toHaveBeenCalledTimes(1);
+});
+
+test("an empty extraRetryStatuses array behaves like the default (429/5xx only)", async () => {
+	const fetch = vi
+		.fn()
+		.mockResolvedValueOnce(fakeResponse(429))
+		.mockResolvedValueOnce(fakeResponse(200));
+	const deps = makeDeps({ fetch });
+
+	const response = await fetchWithRetry("https://example.test", {}, deps, []);
+
+	expect(response.status).toBe(200);
+	expect(fetch).toHaveBeenCalledTimes(2);
+});
+
 test("propagates a fetch rejection (e.g. AbortError) without retrying", async () => {
 	const abortError = new DOMException("Aborted", "AbortError");
 	const fetch = vi.fn().mockRejectedValue(abortError);

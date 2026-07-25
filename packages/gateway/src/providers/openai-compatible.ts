@@ -26,6 +26,13 @@ export interface OpenAiCompatibleAdapterConfig {
 	apiKey: string | undefined;
 	missingKeyMessage: string;
 	retryDeps?: RetryFetchDeps;
+	/**
+	 * Additional HTTP statuses to retry beyond the shared 429/5xx default
+	 * (BUILD_PLAYBOOK.md phase 1 step 11) — e.g. Gemini adds 408 per Google's
+	 * official retry guidance. Omitted by OpenAI/DeepSeek, so their retry
+	 * behavior is unchanged.
+	 */
+	extraRetryStatuses?: readonly number[];
 }
 
 async function readErrorBody(response: Response): Promise<unknown> {
@@ -42,10 +49,10 @@ async function readErrorBody(response: Response): Promise<unknown> {
  * chat/completions contract (IMPLEMENTATION_GUIDE.md §3.2): swap auth, strip
  * `pg_*` fields (§5.1), forward every other caller-supplied field verbatim
  * (including fields PromptGate doesn't itself understand, e.g. DeepSeek's
- * `thinking`), and validate the successful response against the shared
- * `ChatResponseSchema`. `openai.ts` and `deepseek.ts` are thin
- * endpoint/credential wrappers around this. Streaming is out of scope until
- * Phase 2.
+ * `thinking` and Gemini's `extra_body.google`), and validate the successful
+ * response against the shared `ChatResponseSchema`. `openai.ts`,
+ * `deepseek.ts`, and `gemini.ts` are thin endpoint/credential wrappers
+ * around this. Streaming is out of scope until Phase 2.
  */
 export function createOpenAiCompatibleAdapter(
 	config: OpenAiCompatibleAdapterConfig,
@@ -76,6 +83,7 @@ export function createOpenAiCompatibleAdapter(
 					signal,
 				},
 				retryDeps,
+				config.extraRetryStatuses,
 			);
 
 			if (!response.ok) {

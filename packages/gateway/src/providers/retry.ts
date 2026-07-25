@@ -7,6 +7,11 @@
  * aborted signal) propagate directly and are never retried either. Fetch,
  * sleep, and the jitter source are all injectable so retry timing is
  * deterministic in tests — no real waiting, no network.
+ *
+ * `extraRetryStatuses` (BUILD_PLAYBOOK.md phase 1 step 11) lets a caller opt
+ * a handful of additional statuses into the same retry schedule — e.g.
+ * Gemini's adapter adds 408 per Google's official retry guidance. It
+ * defaults to empty, so OpenAI's and DeepSeek's retry behavior is unchanged.
  */
 
 export type FetchLike = (input: string, init: RequestInit) => Promise<Response>;
@@ -47,8 +52,15 @@ export const defaultRetryDeps: RetryFetchDeps = {
 	random: () => Math.random(),
 };
 
-function isRetryableStatus(status: number): boolean {
-	return status === 429 || (status >= 500 && status < 600);
+function isRetryableStatus(
+	status: number,
+	extraRetryStatuses: readonly number[],
+): boolean {
+	return (
+		status === 429 ||
+		(status >= 500 && status < 600) ||
+		extraRetryStatuses.includes(status)
+	);
 }
 
 /** Equal-jitter backoff: half the base delay is fixed, half is randomized. */
@@ -68,20 +80,25 @@ async function releaseBody(response: Response): Promise<void> {
 }
 
 /**
- * Fetches with up to `RETRY_BASE_DELAYS_MS.length` retries on 429/5xx
- * responses. Returns the final response — successful, non-retryable, or the
- * last retryable failure after exhaustion — for the caller to interpret.
+ * Fetches with up to `RETRY_BASE_DELAYS_MS.length` retries on 429/5xx plus
+ * any caller-supplied `extraRetryStatuses`. Returns the final response —
+ * successful, non-retryable, or the last retryable failure after exhaustion
+ * — for the caller to interpret.
  */
 export async function fetchWithRetry(
 	input: string,
 	init: RequestInit,
 	deps: RetryFetchDeps = defaultRetryDeps,
+	extraRetryStatuses: readonly number[] = [],
 ): Promise<Response> {
 	for (let attempt = 0; ; attempt++) {
 		const response = await deps.fetch(input, init);
 
 		const isLastAttempt = attempt >= RETRY_BASE_DELAYS_MS.length;
-		if (!isRetryableStatus(response.status) || isLastAttempt) {
+		if (
+			!isRetryableStatus(response.status, extraRetryStatuses) ||
+			isLastAttempt
+		) {
 			return response;
 		}
 

@@ -102,11 +102,11 @@ The prefix-selected provider must equal the provider on the current date-effecti
 - Streaming: translate Anthropic SSE events into OpenAI `chat.completion.chunk` frames. Usage arrives split: `input_tokens` on `message_start`, `output_tokens` on `message_delta` — combine both for the final usage chunk (decision #3's metering path).
 - **Tool calls: out of scope for v1.** Return a 400 (`tools not supported for anthropic-routed models yet`) rather than a broken translation. `TODO(verify)`: check whether web_builder_llm actually sends `tools`; if yes, tool translation moves from stretch into Phase 2, because dogfooding (deliverable 5) depends on it.
 - OpenAI-routed models: pure passthrough (headers scrubbed, auth swapped) — no body rewriting.
-- Gemini-routed models use Google's official OpenAI-compatible endpoint, `https://generativelanguage.googleapis.com/v1beta/openai/chat/completions`, with Bearer `GEMINI_API_KEY`. Keep a provider-specific wrapper even when a narrow compatible core is shared.
+- Gemini-routed models use Google's official OpenAI-compatible endpoint, `https://generativelanguage.googleapis.com/v1beta/openai/chat/completions`, with Bearer `GEMINI_API_KEY`. Preserve the documented `extra_body.google` extension envelope. Keep a provider-specific wrapper even when a narrow compatible core is shared; Gemini additionally retries transient HTTP 408 with the same bounded jittered schedule as 429/5xx.
 - DeepSeek-routed models use `https://api.deepseek.com/v1/chat/completions` with Bearer `DEEPSEEK_API_KEY`. Preserve caller-supplied compatibility fields, including `thinking`; do not silently enable/disable reasoning. Its normalized usage retains `prompt_cache_hit_tokens` and `prompt_cache_miss_tokens` for cache-aware pricing, and the shared response boundary accepts DeepSeek's documented `insufficient_system_resource` finish reason.
 - All four API keys are optional at boot and required only when their adapter is invoked. A missing key becomes a safe `provider_error`, never a startup failure or secret-bearing response.
 
-Build-time sources verified 2026-07-25: [Gemini OpenAI compatibility](https://ai.google.dev/gemini-api/docs/openai), [Gemini model/pricing](https://ai.google.dev/gemini-api/docs/pricing), [DeepSeek Chat Completions](https://api-docs.deepseek.com/api/create-chat-completion/), and [DeepSeek pricing](https://api-docs.deepseek.com/quick_start/pricing/). Re-check these official contracts when implementing adapters or adding a new date-effective price row.
+Build-time sources verified 2026-07-25: [Gemini OpenAI compatibility](https://ai.google.dev/gemini-api/docs/openai), [Gemini model/pricing](https://ai.google.dev/gemini-api/docs/pricing), [Gemini retry guidance](https://ai.google.dev/gemini-api/docs/troubleshooting), [DeepSeek Chat Completions](https://api-docs.deepseek.com/api/create-chat-completion/), and [DeepSeek pricing](https://api-docs.deepseek.com/quick_start/pricing/). Re-check these official contracts when implementing adapters or adding a new date-effective price row.
 
 ### 3.3 Streaming (decision #3)
 
@@ -136,7 +136,7 @@ Build-time sources verified 2026-07-25: [Gemini OpenAI compatibility](https://ai
 
 ### 3.6 Error taxonomy
 
-All errors leave the gateway in OpenAI error format (`{"error": {"message", "type", "code"}}`) so OpenAI SDKs surface them natively. Gateway-specific `code` values: `invalid_pg_key`, `rate_limited`, `budget_exceeded`, `unknown_model`, `prompt_not_found`, `prompt_var_missing`, `provider_error` (with upstream status attached). Upstream 429/5xx: retry twice with jittered backoff (250ms/1s), then pass through.
+All errors leave the gateway in OpenAI error format (`{"error": {"message", "type", "code"}}`) so OpenAI SDKs surface them natively. Gateway-specific `code` values: `invalid_pg_key`, `rate_limited`, `budget_exceeded`, `unknown_model`, `prompt_not_found`, `prompt_var_missing`, `provider_error` (with upstream status attached). Upstream 429/5xx: retry twice with jittered backoff (250ms/1s), then pass through. Gemini also retries HTTP 408 under the same cap; that opt-in does not widen OpenAI or DeepSeek behavior.
 
 ---
 
