@@ -26,6 +26,25 @@ export class ProviderError extends Error {
 }
 
 /**
+ * Thrown when a caller's request cannot be safely translated into a provider's
+ * native contract — e.g. an Anthropic-routed message carries content the
+ * translation table (§3.2) doesn't support (BUILD_PLAYBOOK.md phase 2 step 2).
+ * The pipeline maps this to an OpenAI `invalid_request_error` at HTTP 400
+ * rather than sending malformed data upstream. `message` is always
+ * client-safe: it is composed by the adapter, never echoes upstream bodies or
+ * secrets, and describes the offending shape without reproducing its content.
+ */
+export class ProviderRequestError extends Error {
+	readonly provider: ProviderName;
+
+	constructor(provider: ProviderName, message: string) {
+		super(message);
+		this.name = "ProviderRequestError";
+		this.provider = provider;
+	}
+}
+
+/**
  * Thrown when a provider adapter is invoked without its required API key
  * configured. Provider keys are optional at boot (IMPLEMENTATION_GUIDE.md
  * §12) — this only surfaces once a request actually needs that provider,

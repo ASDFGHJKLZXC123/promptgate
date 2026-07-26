@@ -13,6 +13,7 @@ import { sendError } from "../errors.js";
 import {
 	ProviderConfigError,
 	ProviderError,
+	ProviderRequestError,
 } from "../providers/provider-error.js";
 import { resolveProvider } from "../providers/routes.js";
 import type { ProviderAdapter, ProviderName } from "../providers/types.js";
@@ -23,7 +24,7 @@ import {
 	type RequestLogStatus,
 } from "./requests.dao.js";
 
-/** Adapters actually wired for this process; Anthropic remains unimplemented until Phase 2. */
+/** Adapters actually wired for this process; Anthropic joined in phase 2 step 2 (non-streaming). */
 export type ProviderAdapterRegistry = Partial<
 	Record<ProviderName, ProviderAdapter>
 >;
@@ -304,6 +305,15 @@ export function registerChatCompletionsRoute(
 						"provider_error",
 						"server_error",
 					);
+				}
+				// The request couldn't be safely translated into the provider's
+				// native contract (e.g. Anthropic tool/content translation, phase 2
+				// step 2) — a caller error, not an upstream failure. Surface it as a
+				// 400 with the adapter's client-safe message, never as provider_error.
+				if (error instanceof ProviderRequestError) {
+					log.status = "rejected_validation";
+					log.errorCode = "invalid_request_error";
+					return sendError(reply, 400, error.message, "invalid_request_error");
 				}
 				return sendProviderError(reply, log, routing.provider, error);
 			} finally {
