@@ -45,6 +45,12 @@ const COMPATIBLE_STREAM_MODELS = {
 	gemini: "gemini-2.5-flash",
 	deepseek: "deepseek-v4-flash",
 } as const satisfies Record<Exclude<Provider, "anthropic">, string>;
+const LIVE_CAPTURE_PENDING = {
+	anthropic: true,
+	openai: true,
+	gemini: false,
+	deepseek: false,
+} as const satisfies Record<Provider, boolean>;
 
 interface FixtureManifestEntry {
 	file: string;
@@ -120,18 +126,23 @@ function parseManifest(value: unknown): FixtureManifestEntry[] {
 	});
 }
 
-function dataLines(transcript: string): string[] {
-	return transcript
-		.split("\n")
-		.filter((line) => line.startsWith("data: "))
-		.map((line) => line.slice("data: ".length));
-}
-
 function sseEvents(transcript: string): string[][] {
 	return transcript
 		.trim()
 		.split("\n\n")
 		.map((event) => event.split("\n"));
+}
+
+function compatibleSsePayloads(transcript: string): string[] {
+	expect(transcript).not.toContain("\r");
+	expect(transcript).toMatch(/^data: [^\n]+\n(?:\ndata: [^\n]+\n)*$/);
+	return transcript
+		.slice(0, -1)
+		.split("\n\n")
+		.map((event) => {
+			expect(event).toMatch(/^data: [^\n]+$/);
+			return event.slice("data: ".length);
+		});
 }
 
 function assertSanitizedIdentifier(value: string): void {
@@ -145,68 +156,91 @@ function assertUsageTotals(usage: JsonRecord): void {
 	);
 }
 
-function assertCompatibleResponse(record: JsonRecord): void {
+function assertCompatibleResponse(
+	provider: Exclude<Provider, "anthropic">,
+	record: JsonRecord,
+): JsonRecord {
 	assertSanitizedIdentifier(stringField(record, "id"));
 	expect(stringField(record, "object")).toBe("chat.completion");
 	numberField(record, "created");
-	expect(stringField(record, "model")).toMatch(/^(gpt|gemini|deepseek)-/);
+	expect(stringField(record, "model")).toBe(COMPATIBLE_STREAM_MODELS[provider]);
+	const choices = arrayField(record, "choices");
+	expect(choices).toHaveLength(1);
 	const choice = asRecord(arrayField(record, "choices")[0], "response choice");
 	const message = asRecord(field(choice, "message"), "response message");
 	expect(stringField(message, "role")).toBe("assistant");
-	expect(stringField(message, "content")).toContain(
-		"PromptGate contract fixture",
-	);
+	const content = stringField(message, "content");
+	if (provider === "gemini") {
+		expect(content).toBe("OK");
+	} else if (provider === "deepseek") {
+		expect(content).toBe("OK.");
+	} else {
+		expect(content).toContain("PromptGate contract fixture");
+	}
 	expect(stringField(choice, "finish_reason")).toBe("stop");
-	assertUsageTotals(asRecord(field(record, "usage"), "response usage"));
+	const usage = asRecord(field(record, "usage"), "response usage");
+	assertUsageTotals(usage);
+	if ("system_fingerprint" in record) {
+		expect(stringField(record, "system_fingerprint")).toBe("fp_pgfixture");
+	}
+	return usage;
 }
 
 function assertCompatibleStream(
 	provider: Exclude<Provider, "anthropic">,
 	transcript: string,
 ): void {
-	const events = sseEvents(transcript);
-	const lines = dataLines(transcript);
-	expect(events).toHaveLength(lines.length);
-	expect(lines.at(-1)).toBe("[DONE]");
-	for (const event of events) {
-		expect(event).toHaveLength(1);
-		expect(event[0]).toMatch(/^data: /);
-	}
+	const payloads = compatibleSsePayloads(transcript);
+	expect(payloads.filter((payload) => payload === "[DONE]")).toHaveLength(1);
+	expect(payloads.at(-1)).toBe("[DONE]");
 
-	const chunks = lines
+	const chunks = payloads
 		.slice(0, -1)
 		.map((line) => asRecord(parseJson(line), "stream chunk"));
 	const terminal = chunks.at(-1);
 	if (terminal === undefined) {
 		throw new Error("Streaming fixture has no JSON chunks.");
 	}
-	expect(arrayField(terminal, "choices")).toEqual([]);
-	assertUsageTotals(asRecord(field(terminal, "usage"), "terminal usage"));
-	const first = chunks[0];
-	const penultimate = chunks.at(-2);
-	if (first === undefined || penultimate === undefined) {
-		throw new Error(
-			"Streaming fixture requires content and terminal usage chunks.",
-		);
+
+	const usageFrameIndexes = chunks.flatMap((chunk, index) =>
+		field(chunk, "usage") === null ? [] : [index],
+	);
+	expect(usageFrameIndexes).toEqual([chunks.length - 1]);
+	const usage = asRecord(field(terminal, "usage"), "terminal usage");
+	assertUsageTotals(usage);
+
+	const terminalChoices = arrayField(terminal, "choices");
+	if (provider === "openai") {
+		expect(terminalChoices).toEqual([]);
+		const finishChunk = chunks.at(-2);
+		if (finishChunk === undefined) {
+			throw new Error("OpenAI fixture requires a separate finish chunk.");
+		}
+		const finishChoices = arrayField(finishChunk, "choices");
+		expect(finishChoices.length).toBeGreaterThan(0);
+		for (const rawChoice of finishChoices) {
+			expect(
+				stringField(
+					asRecord(rawChoice, "OpenAI finish choice"),
+					"finish_reason",
+				),
+			).toBe("stop");
+		}
+	} else {
+		expect(terminalChoices.length).toBeGreaterThan(0);
+		for (const rawChoice of terminalChoices) {
+			expect(
+				stringField(
+					asRecord(rawChoice, `${provider} terminal choice`),
+					"finish_reason",
+				),
+			).toBe("stop");
+		}
 	}
-	const firstChoice = asRecord(
-		arrayField(first, "choices")[0],
-		"first stream choice",
-	);
-	const firstDelta = asRecord(
-		field(firstChoice, "delta"),
-		"first stream delta",
-	);
-	expect(stringField(firstDelta, "role")).toBe("assistant");
-	expect(stringField(firstDelta, "content")).toBe("");
-	const penultimateChoices = arrayField(penultimate, "choices");
-	expect(penultimateChoices.length).toBeGreaterThan(0);
-	expect(
-		stringField(
-			asRecord(penultimateChoices[0], "final stream choice"),
-			"finish_reason",
-		),
-	).toBe("stop");
+
+	let visibleContent = "";
+	let sawAssistantRole = false;
+	const finishReasons: string[] = [];
 
 	for (const chunk of chunks) {
 		assertSanitizedIdentifier(stringField(chunk, "id"));
@@ -215,29 +249,55 @@ function assertCompatibleStream(
 		expect(stringField(chunk, "model")).toBe(
 			COMPATIBLE_STREAM_MODELS[provider],
 		);
-	}
-
-	for (const chunk of chunks.slice(0, -1)) {
-		expect(field(chunk, "usage")).toBeNull();
 		const choices = arrayField(chunk, "choices");
-		if (choices.length === 0) {
-			continue;
+		for (const rawChoice of choices) {
+			const choice = asRecord(rawChoice, "stream choice");
+			numberField(choice, "index");
+			const delta = asRecord(field(choice, "delta"), "stream delta");
+			if ("role" in delta) {
+				expect(stringField(delta, "role")).toBe("assistant");
+				sawAssistantRole = true;
+			}
+			const content = delta.content;
+			if (typeof content === "string") {
+				visibleContent += content;
+			} else if (content !== undefined && content !== null) {
+				throw new Error("delta.content must be a string, null, or absent.");
+			}
+			const finishReason = field(choice, "finish_reason");
+			if (finishReason !== null) {
+				if (typeof finishReason !== "string") {
+					throw new Error("finish_reason must be a string or null.");
+				}
+				finishReasons.push(finishReason);
+			}
+			if (provider === "deepseek") {
+				expect(field(choice, "logprobs")).toBeNull();
+			}
 		}
-		const choice = asRecord(choices[0], "stream choice");
-		numberField(choice, "index");
-		asRecord(field(choice, "delta"), "stream delta");
-		if (provider === "deepseek") {
-			expect(field(choice, "logprobs")).toBeNull();
+		if ("system_fingerprint" in chunk) {
+			expect(stringField(chunk, "system_fingerprint")).toBe("fp_pgfixture");
 		}
+	}
+	expect(sawAssistantRole).toBe(true);
+	expect(finishReasons).toEqual(["stop"]);
+	if (provider === "gemini") {
+		expect(visibleContent).toBe("OK");
+	} else if (provider === "deepseek") {
+		expect(visibleContent).toBe("OK.");
+	} else {
+		expect(visibleContent).toContain("PromptGate contract fixture");
 	}
 
 	if (provider === "deepseek") {
 		for (const chunk of chunks) {
 			expect(stringField(chunk, "system_fingerprint")).toBe("fp_pgfixture");
 		}
-		const usage = asRecord(field(terminal, "usage"), "DeepSeek terminal usage");
-		expect(numberField(usage, "prompt_cache_hit_tokens")).toBe(768);
-		expect(numberField(usage, "prompt_cache_miss_tokens")).toBe(232);
+		expect(numberField(usage, "prompt_tokens")).toBe(7);
+		expect(numberField(usage, "completion_tokens")).toBe(39);
+		expect(numberField(usage, "total_tokens")).toBe(46);
+		expect(numberField(usage, "prompt_cache_hit_tokens")).toBe(0);
+		expect(numberField(usage, "prompt_cache_miss_tokens")).toBe(7);
 		expect(
 			numberField(usage, "prompt_cache_hit_tokens") +
 				numberField(usage, "prompt_cache_miss_tokens"),
@@ -247,7 +307,7 @@ function assertCompatibleStream(
 				asRecord(field(usage, "prompt_tokens_details"), "cache details"),
 				"cached_tokens",
 			),
-		).toBe(768);
+		).toBe(0);
 		expect(
 			numberField(
 				asRecord(
@@ -256,22 +316,18 @@ function assertCompatibleStream(
 				),
 				"reasoning_tokens",
 			),
-		).toBe(214);
+		).toBe(36);
 	}
 
 	if (provider === "gemini") {
-		const usage = asRecord(field(terminal, "usage"), "Gemini terminal usage");
-		expect(
-			numberField(
-				asRecord(field(usage, "prompt_tokens_details"), "cache details"),
-				"cached_tokens",
-			),
-		).toBe(896);
+		expect(numberField(usage, "prompt_tokens")).toBe(4);
+		expect(numberField(usage, "completion_tokens")).toBe(1);
+		expect(numberField(usage, "total_tokens")).toBe(30);
 		const hiddenThinkingTokens =
 			numberField(usage, "total_tokens") -
 			numberField(usage, "prompt_tokens") -
 			numberField(usage, "completion_tokens");
-		expect(hiddenThinkingTokens).toBe(23);
+		expect(hiddenThinkingTokens).toBe(25);
 	}
 }
 
@@ -328,10 +384,7 @@ describe("provider contract fixtures", () => {
 			),
 			"DeepSeek response",
 		);
-		for (const response of [openai, gemini, deepseek]) {
-			assertCompatibleResponse(response);
-		}
-		const openaiUsage = asRecord(field(openai, "usage"), "OpenAI usage");
+		const openaiUsage = assertCompatibleResponse("openai", openai);
 		expect(
 			numberField(
 				asRecord(
@@ -350,26 +403,44 @@ describe("provider contract fixtures", () => {
 				"reasoning_tokens",
 			),
 		).toBe(0);
-		const geminiUsage = asRecord(field(gemini, "usage"), "Gemini usage");
-		expect(
-			numberField(
-				asRecord(
-					field(geminiUsage, "prompt_tokens_details"),
-					"Gemini cache details",
-				),
-				"cached_tokens",
-			),
-		).toBe(896);
+		const geminiUsage = assertCompatibleResponse("gemini", gemini);
+		expect(numberField(geminiUsage, "prompt_tokens")).toBe(4);
+		expect(numberField(geminiUsage, "completion_tokens")).toBe(1);
+		expect(numberField(geminiUsage, "total_tokens")).toBe(30);
 		expect(
 			numberField(geminiUsage, "total_tokens") -
 				numberField(geminiUsage, "prompt_tokens") -
 				numberField(geminiUsage, "completion_tokens"),
-		).toBe(23);
-		const deepseekUsage = asRecord(field(deepseek, "usage"), "DeepSeek usage");
+		).toBe(25);
+		const deepseekUsage = assertCompatibleResponse("deepseek", deepseek);
+		expect(stringField(deepseek, "system_fingerprint")).toBe("fp_pgfixture");
+		expect(numberField(deepseekUsage, "prompt_tokens")).toBe(7);
+		expect(numberField(deepseekUsage, "completion_tokens")).toBe(29);
+		expect(numberField(deepseekUsage, "total_tokens")).toBe(36);
+		expect(numberField(deepseekUsage, "prompt_cache_hit_tokens")).toBe(0);
+		expect(numberField(deepseekUsage, "prompt_cache_miss_tokens")).toBe(7);
 		expect(
 			numberField(deepseekUsage, "prompt_cache_hit_tokens") +
 				numberField(deepseekUsage, "prompt_cache_miss_tokens"),
 		).toBe(numberField(deepseekUsage, "prompt_tokens"));
+		expect(
+			numberField(
+				asRecord(
+					field(deepseekUsage, "prompt_tokens_details"),
+					"DeepSeek cache details",
+				),
+				"cached_tokens",
+			),
+		).toBe(numberField(deepseekUsage, "prompt_cache_hit_tokens"));
+		expect(
+			numberField(
+				asRecord(
+					field(deepseekUsage, "completion_tokens_details"),
+					"DeepSeek reasoning details",
+				),
+				"reasoning_tokens",
+			),
+		).toBe(26);
 
 		const anthropic = asRecord(
 			parseJson(
@@ -470,7 +541,7 @@ describe("provider contract fixtures", () => {
 		);
 	});
 
-	test("marks every fixture pending with exact official HTTPS source URLs and no secrets", async () => {
+	test("records the activated live-capture matrix with exact official HTTPS source URLs and no secrets", async () => {
 		const manifestContents = await readFile(
 			path.join(FIXTURES_DIRECTORY, "manifest.json"),
 			"utf8",
@@ -478,7 +549,9 @@ describe("provider contract fixtures", () => {
 		const secretPattern =
 			/(?:authorization\s*:|x-api-key\s*:|bearer\s+(?!\[redacted\])|\bsk-[a-z0-9_-]{8,}|\bAIza[a-z0-9_-]{20,})/i;
 		for (const fixture of parseManifest(parseJson(manifestContents))) {
-			expect(fixture.live_capture_pending).toBe(true);
+			expect(fixture.live_capture_pending).toBe(
+				LIVE_CAPTURE_PENDING[fixture.provider],
+			);
 			expect(fixture.source_url).toBe(
 				OFFICIAL_SOURCE_URLS[fixture.provider][fixture.mode],
 			);

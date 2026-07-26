@@ -18,28 +18,28 @@
 			"file": "deepseek-non-streaming.json",
 			"provider": "deepseek",
 			"mode": "non-streaming",
-			"live_capture_pending": true,
+			"live_capture_pending": false,
 			"source_url": "https://api-docs.deepseek.com/api/create-chat-completion"
 		},
 		{
 			"file": "deepseek-streaming.txt",
 			"provider": "deepseek",
 			"mode": "streaming",
-			"live_capture_pending": true,
+			"live_capture_pending": false,
 			"source_url": "https://api-docs.deepseek.com/api/create-chat-completion"
 		},
 		{
 			"file": "gemini-non-streaming.json",
 			"provider": "gemini",
 			"mode": "non-streaming",
-			"live_capture_pending": true,
+			"live_capture_pending": false,
 			"source_url": "https://ai.google.dev/gemini-api/docs/openai"
 		},
 		{
 			"file": "gemini-streaming.txt",
 			"provider": "gemini",
 			"mode": "streaming",
-			"live_capture_pending": true,
+			"live_capture_pending": false,
 			"source_url": "https://ai.google.dev/gemini-api/docs/openai"
 		},
 		{

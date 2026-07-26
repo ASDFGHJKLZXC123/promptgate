@@ -121,7 +121,8 @@ function parseChunk(provider: ProviderName, payload: string) {
  * - a frame after `[DONE]`;
  * - `[DONE]` with no preceding terminal usage chunk (missing usage);
  * - a second usage-bearing chunk (duplicate usage);
- * - a usage-bearing chunk whose `choices` are non-empty;
+ * - a usage-bearing chunk whose non-empty `choices` are not all terminal
+ *   (every choice must carry a supported, non-null `finish_reason`);
  * - the byte stream ending without `[DONE]` (missing DONE) or mid-line
  *   (truncated SSE).
  */
@@ -219,10 +220,13 @@ export async function* streamOpenAiCompatible(
 			}
 			const chunk = parseChunk(config.name, payload);
 			if (chunk.usage != null) {
-				if (chunk.choices.length !== 0) {
+				if (
+					chunk.choices.length > 0 &&
+					chunk.choices.some((choice) => choice.finish_reason == null)
+				) {
 					throw new StreamContractError(
 						config.name,
-						"Terminal usage chunk must have empty choices.",
+						"Every choice in a terminal usage chunk must have a finish_reason.",
 					);
 				}
 				sawUsage = true;

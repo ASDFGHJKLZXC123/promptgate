@@ -1,24 +1,21 @@
 {
-	"id": "chatcmpl-pgfixture-gemini-nonstream",
-	"object": "chat.completion",
-	"created": 1785283320,
-	"model": "gemini-2.5-flash",
 	"choices": [
 		{
+			"finish_reason": "stop",
 			"index": 0,
 			"message": {
-				"role": "assistant",
-				"content": "Hello from the PromptGate contract fixture."
-			},
-			"finish_reason": "stop"
+				"content": "OK",
+				"role": "assistant"
+			}
 		}
 	],
+	"created": 1785102387,
+	"id": "chatcmpl-pgfixture-gemini-live-nonstream",
+	"model": "gemini-2.5-flash",
+	"object": "chat.completion",
 	"usage": {
-		"prompt_tokens": 1024,
-		"completion_tokens": 12,
-		"total_tokens": 1059,
-		"prompt_tokens_details": {
-			"cached_tokens": 896
-		}
+		"completion_tokens": 1,
+		"prompt_tokens": 4,
+		"total_tokens": 30
 	}
 }

@@ -1,32 +1,32 @@
 {
-	"id": "chatcmpl-pgfixture-deepseek-nonstream",
+	"id": "chatcmpl-pgfixture-deepseek-live-nonstream",
 	"object": "chat.completion",
-	"created": 1785283440,
+	"created": 1785102388,
 	"model": "deepseek-v4-flash",
 	"choices": [
 		{
 			"index": 0,
 			"message": {
 				"role": "assistant",
-				"reasoning_content": "The user greets the gateway; answer briefly.",
-				"content": "Hello from the PromptGate contract fixture."
+				"content": "OK.",
+				"reasoning_content": "We are asked to say \"OK.\" The user's message is simply \"Say OK.\" So the response should be \"OK.\""
 			},
 			"logprobs": null,
 			"finish_reason": "stop"
 		}
 	],
 	"usage": {
-		"prompt_tokens": 1000,
-		"completion_tokens": 320,
-		"total_tokens": 1320,
-		"prompt_cache_hit_tokens": 768,
-		"prompt_cache_miss_tokens": 232,
+		"prompt_tokens": 7,
+		"completion_tokens": 29,
+		"total_tokens": 36,
 		"prompt_tokens_details": {
-			"cached_tokens": 768
+			"cached_tokens": 0
 		},
 		"completion_tokens_details": {
-			"reasoning_tokens": 214
-		}
+			"reasoning_tokens": 26
+		},
+		"prompt_cache_hit_tokens": 0,
+		"prompt_cache_miss_tokens": 7
 	},
 	"system_fingerprint": "fp_pgfixture"
 }

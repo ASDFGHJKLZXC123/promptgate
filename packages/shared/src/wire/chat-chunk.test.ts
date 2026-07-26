@@ -45,6 +45,28 @@ describe("ChatCompletionChunkSchema", () => {
 		expect(result.success).toBe(true);
 	});
 
+	test("parses a combined terminal content, finish, and usage chunk", () => {
+		const result = ChatCompletionChunkSchema.safeParse({
+			id: "chatcmpl-1",
+			object: "chat.completion.chunk",
+			created: 1,
+			model: "gemini-2.5-flash",
+			choices: [
+				{
+					index: 0,
+					delta: { role: "assistant", content: "OK" },
+					finish_reason: "stop",
+				},
+			],
+			usage: {
+				prompt_tokens: 4,
+				completion_tokens: 1,
+				total_tokens: 30,
+			},
+		});
+		expect(result.success).toBe(true);
+	});
+
 	test("preserves DeepSeek reasoning_content on the delta without treating it as content", () => {
 		const result = ChatCompletionChunkSchema.safeParse({
 			id: "chatcmpl-1",

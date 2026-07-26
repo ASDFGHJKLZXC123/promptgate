@@ -47,6 +47,30 @@ const USAGE_CHUNK = {
 	choices: [],
 	usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
 };
+const GEMINI_COMBINED_TERMINAL_CHUNK = {
+	...CHUNK_BASE,
+	model: "gemini-2.5-flash",
+	choices: [
+		{
+			index: 0,
+			delta: { role: "assistant", content: "OK" },
+			finish_reason: "stop",
+		},
+	],
+	usage: { prompt_tokens: 4, completion_tokens: 1, total_tokens: 30 },
+};
+const DEEPSEEK_COMBINED_TERMINAL_CHUNK = {
+	...CHUNK_BASE,
+	model: "deepseek-v4-flash",
+	choices: [
+		{
+			index: 0,
+			delta: { content: "" },
+			finish_reason: "stop",
+		},
+	],
+	usage: { prompt_tokens: 7, completion_tokens: 39, total_tokens: 46 },
+};
 
 function encode(text: string): Uint8Array {
 	return new TextEncoder().encode(text);
@@ -285,6 +309,56 @@ describe("streamOpenAiCompatible — forwarding and fixture parity", () => {
 		},
 	);
 
+	test("accepts OpenAI's separate empty-choice terminal usage frame", async () => {
+		const fetch = vi.fn().mockResolvedValue(sseResponse(OK_TRANSCRIPT));
+		const chunks = await collectStream(compatibleAdapter(fetch), REQUEST);
+
+		expect(chunks.map((chunk) => chunk.data)).toEqual([
+			JSON.stringify(ROLE_CHUNK),
+			JSON.stringify(CONTENT_CHUNK),
+			JSON.stringify(USAGE_CHUNK),
+			"[DONE]",
+		]);
+	});
+
+	test("accepts Gemini's collapsed content, finish, and usage frame and tee-reads both", async () => {
+		const payload = JSON.stringify(GEMINI_COMBINED_TERMINAL_CHUNK);
+		const fetch = vi
+			.fn()
+			.mockResolvedValue(sseResponse(`data: ${payload}\n\ndata: [DONE]\n`));
+
+		const chunks = await collectStream(
+			createGeminiAdapterForTest(fetch),
+			REQUEST,
+		);
+
+		expect(chunks).toEqual([
+			{ data: payload, done: false },
+			{ data: "[DONE]", done: true },
+		]);
+		expect(readStreamChunk(payload)).toEqual({
+			contentDelta: "OK",
+			visibleContentChars: 2,
+			usage: { prompt_tokens: 4, completion_tokens: 1, total_tokens: 30 },
+		});
+	});
+
+	test("accepts DeepSeek's combined finish and usage frame", async () => {
+		const text = transcript([ROLE_CHUNK, DEEPSEEK_COMBINED_TERMINAL_CHUNK]);
+		const fetch = vi.fn().mockResolvedValue(sseResponse(text));
+
+		const chunks = await collectStream(
+			createDeepSeekAdapterForTest(fetch),
+			REQUEST,
+		);
+
+		expect(chunks.map((chunk) => chunk.data)).toEqual([
+			JSON.stringify(ROLE_CHUNK),
+			JSON.stringify(DEEPSEEK_COMBINED_TERMINAL_CHUNK),
+			"[DONE]",
+		]);
+	});
+
 	test("is invariant to arbitrary byte boundaries in the upstream stream", async () => {
 		const text = readFileSync(
 			path.join(FIXTURES_DIR, "deepseek-streaming.txt"),
@@ -348,10 +422,41 @@ describe("streamOpenAiCompatible — fail-closed contract violations", () => {
 			transcript([ROLE_CHUNK, CONTENT_CHUNK]),
 		],
 		[
-			"usage chunk with non-empty choices",
+			"usage-bearing choice with a null finish_reason",
 			transcript([
 				ROLE_CHUNK,
 				{ ...USAGE_CHUNK, choices: CONTENT_CHUNK.choices },
+			]),
+		],
+		[
+			"usage-bearing choice with a missing finish_reason",
+			transcript([
+				ROLE_CHUNK,
+				{
+					...USAGE_CHUNK,
+					choices: [{ index: 0, delta: { content: "late" } }],
+				},
+			]),
+		],
+		[
+			"mixed usage-bearing choices where one lacks a finish_reason",
+			transcript([
+				ROLE_CHUNK,
+				{
+					...USAGE_CHUNK,
+					choices: [
+						{
+							index: 0,
+							delta: { content: "complete" },
+							finish_reason: "stop",
+						},
+						{
+							index: 1,
+							delta: { content: "incomplete" },
+							finish_reason: null,
+						},
+					],
+				},
 			]),
 		],
 		[

@@ -34,13 +34,14 @@ export const ChatChunkChoiceSchema = z.looseObject({
 export type ChatChunkChoice = z.infer<typeof ChatChunkChoiceSchema>;
 
 /**
- * A streamed chunk. Nonterminal chunks in the authored contracts carry
- * `usage: null` (or omit it) with a populated `choices` array; the single
- * terminal usage chunk requested via `stream_options.include_usage` carries
- * empty `choices` and a validated `ChatUsageSchema`. This schema only validates
- * that `usage`, when present and non-null, is well-formed — the terminal
- * ordering rules (exactly one usage chunk, empty choices, before `[DONE]`) are
- * enforced by the streaming adapter, which fails closed on violation.
+ * A streamed chunk. Nonterminal chunks in the provider contracts carry
+ * `usage: null` (or omit it). The single terminal usage-bearing chunk requested
+ * via `stream_options.include_usage` is either OpenAI's separate frame with
+ * empty `choices`, or a compatible provider's combined final frame whose
+ * choices all carry a supported, non-null `finish_reason`. This schema only
+ * validates that `usage`, when present and non-null, is well-formed — the
+ * terminal ordering and finish rules are enforced by the streaming adapter,
+ * which fails closed on violations.
  */
 export const ChatCompletionChunkSchema = z.looseObject({
 	id: z.string(),
