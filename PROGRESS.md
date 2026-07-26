@@ -2,10 +2,10 @@
 
 > Maintained by the orchestrator (see `ORCHESTRATOR.md`). Updated after every step. Humans: the Position line is always the truth.
 
-**Position:** Phase 0 — done and human-approved; Phase 1 — verify pending
-**Last session:** 2026-07-25 — corrected Gemini hidden-thinking billing exposed by the first current-image Phase 1 live verification, with GPT-5.6 Sol / xhigh approval
-**Repo state at last update:** Gemini 2.5 Flash and Flash-Lite are both priced/routable; Gemini cached input and hidden thinking output are metered exactly while the compatible provider response remains unchanged; Phase 1 live verification must be rerun
-**Last commit:** phase-1 correction: count Gemini thinking tokens (this commit) · **Last green `pnpm lint && pnpm test`:** 2026-07-25 (20 test files, 204 tests passed)
+**Position:** Phase 0 — done and human-approved; Phase 1 — verify pending (provider dashboard comparison)
+**Last session:** 2026-07-25 — the literal Phase 1 Verify block passed live Gemini and DeepSeek calls with exact persisted published-rate costs, but an independent gate audit correctly held the account-dashboard comparison open
+**Repo state at last update:** Phase 1 implementation, local verification, Docker health, live calls, and published-rate reconciliation are complete; provider account-dashboard evidence remains blocked by browser site-use settings; Phase 2 has not started
+**Last commit:** phase-1 verify: record dashboard blocker (this commit) · **Last green `pnpm lint && pnpm test`:** 2026-07-25 (20 test files, 204 tests passed)
 
 ## Phase status
 
@@ -14,7 +14,7 @@ Model/effort per ORCHESTRATOR.md → Model & effort assignment.
 | Phase | Name | Implementer | Status | Verify evidence | Approved by human |
 |---|---|---|---|---|---|
 | 0 | Scaffold | GPT-5.3-Codex-Spark / xhigh; Terra / medium for DB+Docker | done | `docs/evidence/phase-0.md` | project owner — 2026-07-16 |
-| 1 | OpenAI-compatible non-streaming | Claude Sonnet 5 / high; Spark+Luna support; Sol / xhigh expansion audit | verify pending | — | — |
+| 1 | OpenAI-compatible non-streaming | Claude Sonnet 5 / high; Spark+Luna support; Sol / xhigh expansion audit | verify pending | `docs/evidence/phase-1.md` | — |
 | 2 | Anthropic + four-provider streaming | Claude Opus 4.8 / xhigh; Luna fixtures; Sol / xhigh checkpoint | not started | — | — |
 | 3 | Cache, limits, budgets | GPT-5.6 Terra / high; Sol / xhigh budget audit | not started | — | — |
 | 4 | Prompt registry | GPT-5.6 Terra / high; Spark support | not started | — | — |
@@ -40,7 +40,7 @@ Status values: `not started` · `in progress (step K)` · `verify pending` · `a
 
 ## Blockers (current)
 
-- none
+- Phase 1 account-dashboard reconciliation: the live Gemini and DeepSeek rows exactly match their official published-rate formulas, but the playbook separately requires comparison with each provider dashboard to four decimal places. The API keys expose no per-request billing artifact, and both dashboard sites are disabled by the user's browser site-use settings. Resolve with user-supplied dashboard evidence or a human-approved acceptance amendment that accepts the published-rate reconciliation.
 
 ## TODO(verify) resolutions
 
@@ -101,6 +101,7 @@ Small choices the spec didn't cover (architectural ones go to the human instead 
 
 | Date | Covered | Ended at |
 |---|---|---|
+| 2026-07-25 | Phase 1 verification checkpoint — rebuilt the current Docker image, seeded the root mounted database explicitly, and ran the amended Verify block literally. The same pinned OpenAI SDK client returned valid live responses through Gemini 2.5 Flash and DeepSeek V4 Flash; rows persisted as Gemini 3 input/27 billable output/69 micro-USD/ok and DeepSeek 6 input/60 output/18 micro-USD/ok. OpenAI was explicitly deferred because its key is absent, Anthropic was explicitly deferred to Phase 2, Docker remained healthy with HTTP 200, and final lint, 204 tests, strict build, and diff checks passed. An independent gate audit correctly held the separate account-dashboard comparison open; browser access to both dashboards is disabled by the user's site-use settings. Evidence: `docs/evidence/phase-1.md`. | Phase 1 — verify pending on provider dashboard evidence or approved acceptance amendment |
 | 2026-07-25 | Phase 1 live verification correction — the first literal run reused a stale Docker image and returned local 404s without provider calls or request rows; after an explicit current-commit image rebuild, the unchanged block reached both providers. DeepSeek logged 6 input/49 output/15 micro-USD correctly; Gemini exposed hidden-thinking underbilling by returning 3 prompt/2 visible completion/28 total while the row logged only 2 output/6 micro-USD. Added validated total reconciliation, Gemini-only candidate-plus-thinking normalization, exact cached/thinking integration and persistence tests, authority-document updates, 69 focused tests, 204 total tests, lint, build, and GPT-5.6 Sol / xhigh `APPROVE`. | Phase 1 — verify rerun pending |
 | 2026-07-25 | Human-approved Phase 1 pre-verify correction — retained Gemini 2.5 Flash-Lite support; added and pinned Gemini 2.5 Flash with official standard and cached-input pricing; validated/reconciled compatible Gemini/DeepSeek cache fields; exact Gemini cached-input metering through adapter, pipeline, response header, and persisted request row; updated verify/eval documentation; direct Gemini and DeepSeek credential/model checks returned HTTP 200; 107 focused tests, 202 total tests, lint, and build. GPT-5.6 Sol / xhigh requested full DeepSeek dual-field adapter/persistence evidence before approval, which was added. | Phase 1 — verify pending |
 | 2026-07-25 | Phase 1 step 12 — Gemini/DeepSeek prefix routing and default registry wiring; prefix/pricing-provider mismatch rejection; key-independent, no-network four-provider model listing; repository-pinned OpenAI SDK for literal verification; exact Gemini and cache-aware DeepSeek metering plus post-response logging; 50 focused tests, 196 total tests, lint, and build. Claude Sonnet 5 / high implemented the bounded integration; GPT-5.6 Sol / xhigh found only one stale comment, which was corrected before approval. | Phase 1 — verify pending |
