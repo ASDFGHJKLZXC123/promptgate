@@ -2,7 +2,7 @@
 
 Date: 2026-07-25
 
-Status: **pass — awaiting human approval**. Phase 2 has not started.
+Status: **pass — human-approved on 2026-07-25**. Phase 2 has not started.
 
 ## Numbered commit sequence
 
@@ -238,5 +238,5 @@ suite makes no live provider calls.
   **pass**.
 - Phase 2 work: **not started**.
 
-No Phase 1 blocker remains. Explicit human approval of the Phase 1 completion
-gate is still required before Phase 2 starts.
+No Phase 1 blocker remains. The project owner explicitly approved the Phase 1
+completion gate on 2026-07-25. Phase 2 has not started.

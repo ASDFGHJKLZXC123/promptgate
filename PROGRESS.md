@@ -2,10 +2,10 @@
 
 > Maintained by the orchestrator (see `ORCHESTRATOR.md`). Updated after every step. Humans: the Position line is always the truth.
 
-**Position:** Phase 0 — done and human-approved; Phase 1 — awaiting approval
-**Last session:** 2026-07-25 — the project owner approved official published-rate reconciliation plus persisted micro-USD rows as the Phase 1 cost evidence, resolving the final verification blocker
-**Repo state at last update:** Phase 1 implementation and verification are complete; every acceptance criterion passes under the human-approved evidence amendment, completion evidence is captured, and Phase 2 has not started
-**Last commit:** phase-1 verify: complete the published-rate gate (this commit) · **Last green `pnpm lint && pnpm test`:** 2026-07-25 (20 test files, 204 tests passed)
+**Position:** Phase 0 — done and human-approved; Phase 1 — done and human-approved; Phase 2 — not started
+**Last session:** 2026-07-25 — the project owner explicitly approved the Phase 1 completion gate after every acceptance criterion passed
+**Repo state at last update:** Phase 1 is complete and human-approved with evidence captured; Phase 2 has not started
+**Last commit:** phase-1 approve: record the completion gate (this commit) · **Last green `pnpm lint && pnpm test`:** 2026-07-25 (20 test files, 204 tests passed)
 
 ## Phase status
 
@@ -14,7 +14,7 @@ Model/effort per ORCHESTRATOR.md → Model & effort assignment.
 | Phase | Name | Implementer | Status | Verify evidence | Approved by human |
 |---|---|---|---|---|---|
 | 0 | Scaffold | GPT-5.3-Codex-Spark / xhigh; Terra / medium for DB+Docker | done | `docs/evidence/phase-0.md` | project owner — 2026-07-16 |
-| 1 | OpenAI-compatible non-streaming | Claude Sonnet 5 / high; Spark+Luna support; Sol / xhigh expansion audit | awaiting approval | `docs/evidence/phase-1.md` | — |
+| 1 | OpenAI-compatible non-streaming | Claude Sonnet 5 / high; Spark+Luna support; Sol / xhigh expansion audit | done | `docs/evidence/phase-1.md` | project owner — 2026-07-25 |
 | 2 | Anthropic + four-provider streaming | Claude Opus 4.8 / xhigh; Luna fixtures; Sol / xhigh checkpoint | not started | — | — |
 | 3 | Cache, limits, budgets | GPT-5.6 Terra / high; Sol / xhigh budget audit | not started | — | — |
 | 4 | Prompt registry | GPT-5.6 Terra / high; Spark support | not started | — | — |
@@ -102,6 +102,7 @@ Small choices the spec didn't cover (architectural ones go to the human instead 
 
 | Date | Covered | Ended at |
 |---|---|---|
+| 2026-07-25 | Phase 1 completion gate — the project owner explicitly approved the completed and verified phase after reviewing commits, changed-file scope, live/deferred provider matrix, exact published-rate reconciliation, lint, 204 tests, strict build, Docker health, resolved deviations, and the final evidence record. | Phase 2 — not started |
 | 2026-07-25 | Human-approved Phase 1 cost-evidence amendment — accepted independently recorded official published-rate reconciliation plus persisted integer micro-USD rows in place of provider account-dashboard artifacts. Updated the Phase 1 acceptance table, literal Verify outcome requirement, completion evidence, decision log, and current position without changing the already-run Verify block or any code. The prior independent audit's only blocker is resolved; all Phase 1 acceptance criteria now pass. | Phase 1 completion gate — awaiting explicit human approval |
 | 2026-07-25 | Phase 1 verification checkpoint — rebuilt the current Docker image, seeded the root mounted database explicitly, and ran the amended Verify block literally. The same pinned OpenAI SDK client returned valid live responses through Gemini 2.5 Flash and DeepSeek V4 Flash; rows persisted as Gemini 3 input/27 billable output/69 micro-USD/ok and DeepSeek 6 input/60 output/18 micro-USD/ok. OpenAI was explicitly deferred because its key is absent, Anthropic was explicitly deferred to Phase 2, Docker remained healthy with HTTP 200, and final lint, 204 tests, strict build, and diff checks passed. An independent gate audit correctly held the separate account-dashboard comparison open; browser access to both dashboards is disabled by the user's site-use settings. Evidence: `docs/evidence/phase-1.md`. | Phase 1 — verify pending on provider dashboard evidence or approved acceptance amendment |
 | 2026-07-25 | Phase 1 live verification correction — the first literal run reused a stale Docker image and returned local 404s without provider calls or request rows; after an explicit current-commit image rebuild, the unchanged block reached both providers. DeepSeek logged 6 input/49 output/15 micro-USD correctly; Gemini exposed hidden-thinking underbilling by returning 3 prompt/2 visible completion/28 total while the row logged only 2 output/6 micro-USD. Added validated total reconciliation, Gemini-only candidate-plus-thinking normalization, exact cached/thinking integration and persistence tests, authority-document updates, 69 focused tests, 204 total tests, lint, build, and GPT-5.6 Sol / xhigh `APPROVE`. | Phase 1 — verify rerun pending |
