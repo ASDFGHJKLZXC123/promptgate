@@ -1,0 +1,32 @@
+{
+	"id": "chatcmpl-pgfixture-deepseek-nonstream",
+	"object": "chat.completion",
+	"created": 1785283440,
+	"model": "deepseek-v4-flash",
+	"choices": [
+		{
+			"index": 0,
+			"message": {
+				"role": "assistant",
+				"reasoning_content": "The user greets the gateway; answer briefly.",
+				"content": "Hello from the PromptGate contract fixture."
+			},
+			"logprobs": null,
+			"finish_reason": "stop"
+		}
+	],
+	"usage": {
+		"prompt_tokens": 1000,
+		"completion_tokens": 320,
+		"total_tokens": 1320,
+		"prompt_cache_hit_tokens": 768,
+		"prompt_cache_miss_tokens": 232,
+		"prompt_tokens_details": {
+			"cached_tokens": 768
+		},
+		"completion_tokens_details": {
+			"reasoning_tokens": 214
+		}
+	},
+	"system_fingerprint": "fp_pgfixture"
+}

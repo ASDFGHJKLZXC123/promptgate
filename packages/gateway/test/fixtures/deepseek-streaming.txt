@@ -1,0 +1,11 @@
+data: {"id":"chatcmpl-pgfixture-deepseek-stream","object":"chat.completion.chunk","created":1785283500,"model":"deepseek-v4-flash","system_fingerprint":"fp_pgfixture","choices":[{"index":0,"delta":{"role":"assistant","content":""},"logprobs":null,"finish_reason":null}],"usage":null}
+
+data: {"id":"chatcmpl-pgfixture-deepseek-stream","object":"chat.completion.chunk","created":1785283500,"model":"deepseek-v4-flash","system_fingerprint":"fp_pgfixture","choices":[{"index":0,"delta":{"reasoning_content":"The user greets the gateway."},"logprobs":null,"finish_reason":null}],"usage":null}
+
+data: {"id":"chatcmpl-pgfixture-deepseek-stream","object":"chat.completion.chunk","created":1785283500,"model":"deepseek-v4-flash","system_fingerprint":"fp_pgfixture","choices":[{"index":0,"delta":{"content":"Hello from the PromptGate contract fixture."},"logprobs":null,"finish_reason":null}],"usage":null}
+
+data: {"id":"chatcmpl-pgfixture-deepseek-stream","object":"chat.completion.chunk","created":1785283500,"model":"deepseek-v4-flash","system_fingerprint":"fp_pgfixture","choices":[{"index":0,"delta":{},"logprobs":null,"finish_reason":"stop"}],"usage":null}
+
+data: {"id":"chatcmpl-pgfixture-deepseek-stream","object":"chat.completion.chunk","created":1785283500,"model":"deepseek-v4-flash","system_fingerprint":"fp_pgfixture","choices":[],"usage":{"prompt_tokens":1000,"completion_tokens":320,"total_tokens":1320,"prompt_cache_hit_tokens":768,"prompt_cache_miss_tokens":232,"prompt_tokens_details":{"cached_tokens":768},"completion_tokens_details":{"reasoning_tokens":214}}}
+
+data: [DONE]

@@ -2,10 +2,10 @@
 
 > Maintained by the orchestrator (see `ORCHESTRATOR.md`). Updated after every step. Humans: the Position line is always the truth.
 
-**Position:** Phase 0 — done and human-approved; Phase 1 — done and human-approved; Phase 2 — in progress (step 1)
-**Last session:** 2026-07-25 — completed Phase 2 preflight, resolved the web_builder_llm tools TODO, and received human approval for offline-first fixtures with live capture deferred to the Verify window
-**Repo state at last update:** Phase 2 authority and repository preflight are complete; step 1 is not yet implemented; Phase 3 has not started
-**Last commit:** phase-2 amend: defer live fixture capture to verify (this commit) · **Last green `pnpm lint && pnpm test`:** 2026-07-25 (20 test files, 204 tests passed)
+**Position:** Phase 0 — done and human-approved; Phase 1 — done and human-approved; Phase 2 — in progress (step 2)
+**Last session:** 2026-07-25 — completed Phase 2 step 1 with eight offline provider contract fixtures, strict fixture-integrity tests, and an independent Sol / xhigh approval
+**Repo state at last update:** Phase 2 step 1 is complete; step 2 is not started; every fixture remains `live_capture_pending` until the approved Verify window; Phase 3 has not started
+**Last commit:** phase-2 step-1: author provider contract fixtures (this commit) · **Last green `pnpm lint && pnpm test`:** 2026-07-25 (21 test files, 208 tests passed)
 
 ## Phase status
 
@@ -15,7 +15,7 @@ Model/effort per ORCHESTRATOR.md → Model & effort assignment.
 |---|---|---|---|---|---|
 | 0 | Scaffold | GPT-5.3-Codex-Spark / xhigh; Terra / medium for DB+Docker | done | `docs/evidence/phase-0.md` | project owner — 2026-07-16 |
 | 1 | OpenAI-compatible non-streaming | Claude Sonnet 5 / high; Spark+Luna support; Sol / xhigh expansion audit | done | `docs/evidence/phase-1.md` | project owner — 2026-07-25 |
-| 2 | Anthropic + four-provider streaming | Claude Opus 4.8 / xhigh; Luna fixtures; Sol / xhigh checkpoint | in progress (step 1) | — | — |
+| 2 | Anthropic + four-provider streaming | Claude Opus 4.8 / xhigh; Luna fixtures; Sol / xhigh checkpoint | in progress (step 2) | — | — |
 | 3 | Cache, limits, budgets | GPT-5.6 Terra / high; Sol / xhigh budget audit | not started | — | — |
 | 4 | Prompt registry | GPT-5.6 Terra / high; Spark support | not started | — | — |
 | 5 | Eval harness | Claude Opus 4.8 / xhigh; Spark+Luna support; Fable dataset | not started | — | — |
@@ -103,6 +103,7 @@ Small choices the spec didn't cover (architectural ones go to the human instead 
 
 | Date | Covered | Ended at |
 |---|---|---|
+| 2026-07-25 | Phase 2 step 1 — authored exactly eight official-contract fixtures: one non-streaming JSON response and one raw streaming SSE transcript for OpenAI, Anthropic, Gemini, and DeepSeek; recorded exact official sources and `live_capture_pending` for every fixture; added provider-specific integrity checks for response identity, SSE order/termination, usage, cache, reasoning, hidden-thinking reconciliation, sanitized identifiers, and secret absence; and kept all work offline. Claude Opus 4.8 / xhigh produced the initial partial set before stalling; GPT-5.6 Terra / medium completed the bounded fixture mechanics because Luna was unavailable; GPT-5.6 Sol / xhigh required stronger DeepSeek and integrity coverage, then returned `APPROVE`. Four focused fixture tests and the full 208-test suite passed. | Phase 2, step 2 — not started |
 | 2026-07-25 | Phase 2 preflight and human-approved fixture-timing amendment — read the complete orchestration manual, current progress, Phase 2 playbook, and GUIDE §§3.1–3.6, 5.1, and 11; confirmed a clean Phase 1-approved repository with 204 tests green; verified Gemini/DeepSeek keys present and OpenAI/Anthropic absent without exposing values; resolved the external tools TODO by inspecting web_builder_llm's native Anthropic client; and retained the higher-authority no-live-calls-before-Verify safety rail. Claude Opus 4.8 / xhigh confirmed the documentation conflict and amendment direction. | Phase 2, step 1 — not started |
 | 2026-07-25 | Phase 1 completion gate — the project owner explicitly approved the completed and verified phase after reviewing commits, changed-file scope, live/deferred provider matrix, exact published-rate reconciliation, lint, 204 tests, strict build, Docker health, resolved deviations, and the final evidence record. | Phase 2 — not started |
 | 2026-07-25 | Human-approved Phase 1 cost-evidence amendment — accepted independently recorded official published-rate reconciliation plus persisted integer micro-USD rows in place of provider account-dashboard artifacts. Updated the Phase 1 acceptance table, literal Verify outcome requirement, completion evidence, decision log, and current position without changing the already-run Verify block or any code. The prior independent audit's only blocker is resolved; all Phase 1 acceptance criteria now pass. | Phase 1 completion gate — awaiting explicit human approval |

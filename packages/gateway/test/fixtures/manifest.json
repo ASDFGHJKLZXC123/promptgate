@@ -1,0 +1,60 @@
+{
+	"fixtures": [
+		{
+			"file": "anthropic-non-streaming.json",
+			"provider": "anthropic",
+			"mode": "non-streaming",
+			"live_capture_pending": true,
+			"source_url": "https://platform.claude.com/docs/en/api/messages"
+		},
+		{
+			"file": "anthropic-streaming.txt",
+			"provider": "anthropic",
+			"mode": "streaming",
+			"live_capture_pending": true,
+			"source_url": "https://platform.claude.com/docs/en/api/messages-streaming"
+		},
+		{
+			"file": "deepseek-non-streaming.json",
+			"provider": "deepseek",
+			"mode": "non-streaming",
+			"live_capture_pending": true,
+			"source_url": "https://api-docs.deepseek.com/api/create-chat-completion"
+		},
+		{
+			"file": "deepseek-streaming.txt",
+			"provider": "deepseek",
+			"mode": "streaming",
+			"live_capture_pending": true,
+			"source_url": "https://api-docs.deepseek.com/api/create-chat-completion"
+		},
+		{
+			"file": "gemini-non-streaming.json",
+			"provider": "gemini",
+			"mode": "non-streaming",
+			"live_capture_pending": true,
+			"source_url": "https://ai.google.dev/gemini-api/docs/openai"
+		},
+		{
+			"file": "gemini-streaming.txt",
+			"provider": "gemini",
+			"mode": "streaming",
+			"live_capture_pending": true,
+			"source_url": "https://ai.google.dev/gemini-api/docs/openai"
+		},
+		{
+			"file": "openai-non-streaming.json",
+			"provider": "openai",
+			"mode": "non-streaming",
+			"live_capture_pending": true,
+			"source_url": "https://platform.openai.com/docs/api-reference/chat/create"
+		},
+		{
+			"file": "openai-streaming.txt",
+			"provider": "openai",
+			"mode": "streaming",
+			"live_capture_pending": true,
+			"source_url": "https://platform.openai.com/docs/api-reference/chat/create"
+		}
+	]
+}
