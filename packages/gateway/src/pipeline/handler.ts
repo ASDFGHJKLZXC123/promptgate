@@ -30,6 +30,8 @@ import type {
 	ProviderName,
 	SseChunk,
 } from "../providers/types.js";
+import { type CacheHit, findAndRecordCacheHit } from "./cache.dao.js";
+import { cacheKeyOf } from "./cache-key.js";
 import { meterAbortedStream, meterStreamUsage, meterUsage } from "./meter.js";
 import {
 	insertRequestLog,
@@ -54,6 +56,7 @@ interface PendingRequestLog {
 	provider: RequestLogProvider;
 	model: string;
 	feature?: string | null;
+	cacheHit: boolean;
 	streamed: boolean;
 	inputTokens?: number | null;
 	outputTokens?: number | null;
@@ -102,6 +105,7 @@ function initializeRequestLog(
 		apiKeyId: request.ctx.apiKey.id,
 		provider: "unknown",
 		model: "unknown",
+		cacheHit: false,
 		streamed: false,
 		costEstimated: false,
 		status: "rejected_validation",
@@ -152,7 +156,7 @@ async function logRequest(
 			provider: log.provider,
 			model: log.model,
 			feature: log.feature,
-			cacheHit: false,
+			cacheHit: log.cacheHit,
 			streamed: log.streamed,
 			inputTokens: log.inputTokens,
 			outputTokens: log.outputTokens,
@@ -170,6 +174,71 @@ async function logRequest(
 			"Failed to persist requests row",
 		);
 	}
+}
+
+/**
+ * A cached streaming completion is replayed as an intentionally compact,
+ * OpenAI-compatible SSE sequence (§3.3): one complete delta frame, a final
+ * usage frame, then `[DONE]`. Copying each stored message into `delta` keeps
+ * multiple choices and compatible fields such as `tool_calls` intact.
+ */
+function cacheReplayFrames(hit: CacheHit): Buffer[] {
+	const {
+		choices,
+		usage: _usage,
+		object: _object,
+		...responseExtras
+	} = hit.response;
+	const completionChunk = {
+		...responseExtras,
+		object: "chat.completion.chunk",
+		choices: choices.map((choice) => {
+			const { message, ...choiceExtras } = choice;
+			return { ...choiceExtras, delta: { ...message } };
+		}),
+		usage: null,
+	};
+	const usageChunk = {
+		...responseExtras,
+		object: "chat.completion.chunk",
+		choices: [],
+		usage: hit.usage,
+	};
+
+	return [completionChunk, usageChunk, "[DONE]"].map((frame) =>
+		Buffer.from(
+			frameSseData(typeof frame === "string" ? frame : JSON.stringify(frame)),
+			"utf8",
+		),
+	);
+}
+
+/** Applies cache-hit accounting and returns the replay without touching an adapter. */
+function sendCacheHit(
+	db: Database.Database,
+	reply: FastifyReply,
+	log: PendingRequestLog,
+	body: ChatRequest,
+	hit: CacheHit,
+): FastifyReply {
+	log.cacheHit = true;
+	log.streamed = body.stream === true;
+	const normalizedUsage = meterStreamUsage(db, body.model, hit.usage);
+	log.inputTokens = normalizedUsage.inputTokens;
+	log.outputTokens = normalizedUsage.outputTokens;
+	log.costMicroUsd = 0;
+	log.costEstimated = false;
+	log.status = "ok";
+	reply.header("x-pg-cache", "hit");
+	reply.header("x-pg-cost-usd", "0.000000");
+
+	if (body.stream === true) {
+		reply.header("content-type", "text/event-stream");
+		reply.header("cache-control", "no-cache");
+		return reply.send(Readable.from(cacheReplayFrames(hit)));
+	}
+
+	return reply.send(hit.response);
 }
 
 /** Maps a thrown adapter error to the shared OpenAI `provider_error` envelope (§3.6), never echoing upstream bodies. */
@@ -594,6 +663,20 @@ export function registerChatCompletionsRoute(
 				return reply.code(routing.statusCode).send(routing.error);
 			}
 			log.provider = routing.provider;
+
+			// Exact-match cache reads belong after route/pricing resolution (and, in
+			// phase 4, after prompt resolution) but before adapter availability or any
+			// upstream call. A malformed, expired, or mismatched cache row is a safe
+			// miss; `pg_no_cache` bypasses this path entirely (§§3.4, 5.1).
+			if (body.pg_no_cache !== true) {
+				const hit = findAndRecordCacheHit(db, {
+					hash: cacheKeyOf(body),
+					model: body.model,
+				});
+				if (hit) {
+					return sendCacheHit(db, reply, log, body, hit);
+				}
+			}
 
 			const adapter = adapters[routing.provider];
 			if (!adapter) {

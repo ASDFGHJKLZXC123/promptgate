@@ -18,6 +18,7 @@ import type {
 	ProviderName,
 	SseChunk,
 } from "../providers/types.js";
+import { cacheKeyOf } from "./cache-key.js";
 
 interface OpenAIErrorResponse {
 	error: { message: string; type: string; code: string };
@@ -26,6 +27,7 @@ interface OpenAIErrorResponse {
 interface RequestsRow {
 	provider: string;
 	model: string;
+	cache_hit: number;
 	streamed: number;
 	input_tokens: number | null;
 	output_tokens: number | null;
@@ -346,6 +348,145 @@ async function readRow(
 }
 
 describe("POST /v1/chat/completions — streaming success", () => {
+	test("replays a cache hit as valid compact SSE without invoking either adapter method", async () => {
+		const db = openTestDb();
+		seedApiKey(db);
+		seedPricing(db, "gpt-stream-cache", 1_000_000, 2_000_000);
+		const request: ChatRequest = {
+			model: "gpt-stream-cache",
+			messages: [{ role: "user", content: "say hi" }],
+			stream: true,
+		};
+		const cached: ChatResponse = {
+			id: "chatcmpl-cached-stream",
+			object: "chat.completion",
+			created: 5,
+			model: "gpt-stream-cache-2026-07-01",
+			system_fingerprint: "fp-cache-replay",
+			service_tier: "priority",
+			choices: [
+				{
+					index: 0,
+					message: { role: "assistant", content: "cached text" },
+					finish_reason: "stop",
+					logprobs: { content: [] },
+				},
+				{
+					index: 1,
+					message: {
+						role: "assistant",
+						content: null,
+						tool_calls: [
+							{
+								id: "call_cached",
+								type: "function",
+								function: { name: "lookup", arguments: "{}" },
+							},
+						],
+					},
+					finish_reason: "tool_calls",
+				},
+			],
+			usage: { prompt_tokens: 8, completion_tokens: 3, total_tokens: 11 },
+		};
+		db.prepare(
+			`INSERT INTO cache_entries (
+				hash, model, response_json, usage_json, priced_cost_micro_usd, expires_at
+			) VALUES (?, ?, ?, ?, 42, '2999-01-01 00:00:00')`,
+		).run(
+			cacheKeyOf(request),
+			request.model,
+			JSON.stringify(cached),
+			JSON.stringify(cached.usage),
+		);
+
+		let completeCalls = 0;
+		let streamCalls = 0;
+		const adapter: ProviderAdapter = {
+			name: "openai",
+			async complete() {
+				completeCalls += 1;
+				throw new Error("cache hit must not complete upstream");
+			},
+			async *stream() {
+				streamCalls += 1;
+				yield DONE;
+				throw new Error("cache hit must not stream upstream");
+			},
+		};
+		const server = await buildTestServer({ openai: adapter });
+
+		try {
+			const response = await server.inject({
+				method: "POST",
+				url: "/v1/chat/completions",
+				headers: authHeaders(),
+				body: JSON.stringify(request),
+			});
+			expect(response.statusCode).toBe(200);
+			expect(response.headers["content-type"]).toContain("text/event-stream");
+			expect(response.headers["x-pg-cache"]).toBe("hit");
+			expect(response.headers["x-pg-cost-usd"]).toBe("0.000000");
+			expect(completeCalls).toBe(0);
+			expect(streamCalls).toBe(0);
+
+			const frames = await parseClientSse(response.payload);
+			expect(frames).toHaveLength(3);
+			const completion = JSON.parse(frames[0] as string) as Record<
+				string,
+				unknown
+			>;
+			expect(completion).toMatchObject({
+				id: "chatcmpl-cached-stream",
+				object: "chat.completion.chunk",
+				model: "gpt-stream-cache-2026-07-01",
+				system_fingerprint: "fp-cache-replay",
+				service_tier: "priority",
+				usage: null,
+				choices: [
+					{
+						index: 0,
+						delta: { role: "assistant", content: "cached text" },
+						logprobs: { content: [] },
+					},
+					{
+						index: 1,
+						delta: { tool_calls: [{ id: "call_cached" }] },
+						finish_reason: "tool_calls",
+					},
+				],
+			});
+			expect(JSON.parse(frames[1] as string)).toMatchObject({
+				model: "gpt-stream-cache-2026-07-01",
+				system_fingerprint: "fp-cache-replay",
+				service_tier: "priority",
+				choices: [],
+				usage: cached.usage,
+			});
+			expect(frames[2]).toBe("[DONE]");
+
+			const row = await readRow(
+				db,
+				response.headers["x-pg-request-id"] as string,
+			);
+			expect(row).toMatchObject({
+				cache_hit: 1,
+				streamed: 1,
+				input_tokens: 8,
+				output_tokens: 3,
+				cost_micro_usd: 0,
+				cost_estimated: 0,
+				status: "ok",
+			});
+			expect(db.prepare("SELECT hit_count FROM cache_entries").get()).toEqual({
+				hit_count: 1,
+			});
+		} finally {
+			await server.close();
+			db.close();
+		}
+	});
+
 	test("streams frames, sets SSE headers, omits x-pg-cost-usd, and persists a streamed row", async () => {
 		const db = openTestDb();
 		seedApiKey(db);

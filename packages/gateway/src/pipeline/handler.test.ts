@@ -10,6 +10,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { openDatabase } from "../db/index.js";
 import { migrate } from "../db/migrate.js";
 import type { ProviderAdapter, ProviderName } from "../providers/types.js";
+import { cacheKeyOf } from "./cache-key.js";
 
 interface OpenAIErrorResponse {
 	error: { message: string; type: string; code: string };
@@ -159,6 +160,33 @@ function fakeChatResponse(overrides: Partial<ChatResponse> = {}): ChatResponse {
 		usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
 		...overrides,
 	};
+}
+
+function seedCacheEntry(
+	db: Database.Database,
+	request: ChatRequest,
+	response: ChatResponse,
+	overrides: Partial<{
+		model: string;
+		responseJson: string;
+		usageJson: string;
+		expiresAt: string;
+	}> = {},
+): void {
+	if (!response.usage) {
+		throw new Error("Cache fixture requires usage.");
+	}
+	db.prepare(
+		`INSERT INTO cache_entries (
+			hash, model, response_json, usage_json, priced_cost_micro_usd, expires_at
+		) VALUES (?, ?, ?, ?, 77, ?)`,
+	).run(
+		cacheKeyOf(request),
+		overrides.model ?? request.model,
+		overrides.responseJson ?? JSON.stringify(response),
+		overrides.usageJson ?? JSON.stringify(response.usage),
+		overrides.expiresAt ?? "2999-01-01 00:00:00",
+	);
 }
 
 interface FakeAdapterHandle {
@@ -349,6 +377,194 @@ describe("POST /v1/chat/completions — success path", () => {
 				.prepare("SELECT feature FROM requests WHERE request_id = ?")
 				.get(requestId) as { feature: string | null };
 			expect(row.feature).toBe("inbox_summary");
+		} finally {
+			await server.close();
+			db.close();
+		}
+	});
+});
+
+describe("POST /v1/chat/completions — cache read path", () => {
+	test("returns a cache hit without calling the adapter and logs exact zero-cost cache accounting", async () => {
+		const db = openTestDb();
+		seedApiKey(db);
+		seedPricing(db, "gpt-cache", 1_000_000, 2_000_000);
+		const body: ChatRequest = {
+			model: "gpt-cache",
+			messages: [{ role: "user", content: "cache this" }],
+		};
+		const cached = fakeChatResponse({
+			model: "gpt-cache",
+			usage: { prompt_tokens: 7, completion_tokens: 4, total_tokens: 11 },
+		});
+		seedCacheEntry(db, body, cached);
+		const { adapter, calls } = fakeAdapter(async () => fakeChatResponse());
+		const server = await buildTestServer({ openai: adapter });
+
+		try {
+			const response = await server.inject({
+				method: "POST",
+				url: "/v1/chat/completions",
+				headers: authHeaders(),
+				body: JSON.stringify(body),
+			});
+
+			expect(response.statusCode).toBe(200);
+			expect(response.headers["x-pg-cache"]).toBe("hit");
+			expect(response.headers["x-pg-cost-usd"]).toBe("0.000000");
+			expect(response.json()).toEqual(cached);
+			expect(calls).toHaveLength(0);
+
+			await new Promise((resolve) => setTimeout(resolve, 20));
+			const requestId = response.headers["x-pg-request-id"] as string;
+			const row = db
+				.prepare("SELECT * FROM requests WHERE request_id = ?")
+				.get(requestId) as RequestsRow;
+			expect(row).toMatchObject({
+				request_id: requestId,
+				provider: "openai",
+				model: "gpt-cache",
+				cache_hit: 1,
+				streamed: 0,
+				input_tokens: 7,
+				output_tokens: 4,
+				cost_micro_usd: 0,
+				cost_estimated: 0,
+				status: "ok",
+			});
+			expect(
+				db.prepare("SELECT hit_count, last_hit_at FROM cache_entries").get(),
+			).toEqual({ hit_count: 1, last_hit_at: expect.any(String) });
+		} finally {
+			await server.close();
+			db.close();
+		}
+	});
+
+	test("treats corrupt, expired, and model-mismatched entries as misses without incrementing them", async () => {
+		const db = openTestDb();
+		seedApiKey(db);
+		seedPricing(db, "gpt-cache", 1_000_000, 2_000_000);
+		const body: ChatRequest = {
+			model: "gpt-cache",
+			messages: [{ role: "user", content: "miss safely" }],
+		};
+		const { adapter, calls } = fakeAdapter(async () =>
+			fakeChatResponse({ model: "gpt-cache" }),
+		);
+		const server = await buildTestServer({ openai: adapter });
+
+		try {
+			for (const invalid of [
+				{ responseJson: "not-json" },
+				{ expiresAt: "2000-01-01 00:00:00" },
+				{ model: "other-model" },
+			]) {
+				seedCacheEntry(
+					db,
+					body,
+					fakeChatResponse({ model: "gpt-cache" }),
+					invalid,
+				);
+				const response = await server.inject({
+					method: "POST",
+					url: "/v1/chat/completions",
+					headers: authHeaders(),
+					body: JSON.stringify(body),
+				});
+				expect(response.statusCode).toBe(200);
+				expect(response.headers["x-pg-cache"]).toBe("miss");
+				db.prepare("DELETE FROM cache_entries").run();
+			}
+			expect(calls).toHaveLength(3);
+		} finally {
+			await server.close();
+			db.close();
+		}
+	});
+
+	test("pg_no_cache bypasses an otherwise usable cache entry", async () => {
+		const db = openTestDb();
+		seedApiKey(db);
+		seedPricing(db, "gpt-cache", 1_000_000, 2_000_000);
+		const cachedRequest: ChatRequest = {
+			model: "gpt-cache",
+			messages: [{ role: "user", content: "bypass" }],
+		};
+		seedCacheEntry(db, cachedRequest, fakeChatResponse({ model: "gpt-cache" }));
+		const { adapter, calls } = fakeAdapter(async () =>
+			fakeChatResponse({ model: "gpt-cache" }),
+		);
+		const server = await buildTestServer({ openai: adapter });
+
+		try {
+			const response = await server.inject({
+				method: "POST",
+				url: "/v1/chat/completions",
+				headers: authHeaders(),
+				body: JSON.stringify({ ...cachedRequest, pg_no_cache: true }),
+			});
+			expect(response.headers["x-pg-cache"]).toBe("miss");
+			expect(calls).toHaveLength(1);
+			expect(db.prepare("SELECT hit_count FROM cache_entries").get()).toEqual({
+				hit_count: 0,
+			});
+		} finally {
+			await server.close();
+			db.close();
+		}
+	});
+
+	test("logs Gemini cache hits with normalized hidden-thinking output tokens while keeping cost zero", async () => {
+		const db = openTestDb();
+		seedApiKey(db);
+		seedPricing(db, "gemini-cache-normalized", 300_000, 2_500_000, {
+			provider: "gemini",
+			cachedInputRate: 30_000,
+		});
+		const body: ChatRequest = {
+			model: "gemini-cache-normalized",
+			messages: [{ role: "user", content: "remember this" }],
+		};
+		const cached = fakeChatResponse({
+			model: "gemini-cache-normalized-2026-07-01",
+			usage: {
+				prompt_tokens: 100,
+				completion_tokens: 5,
+				total_tokens: 114,
+				prompt_tokens_details: { cached_tokens: 40 },
+			},
+		});
+		seedCacheEntry(db, body, cached);
+		const { adapter, calls } = fakeAdapter(
+			async () => fakeChatResponse({ model: "gemini-cache-normalized" }),
+			"gemini",
+		);
+		const server = await buildTestServer({ gemini: adapter });
+
+		try {
+			const response = await server.inject({
+				method: "POST",
+				url: "/v1/chat/completions",
+				headers: authHeaders(),
+				body: JSON.stringify(body),
+			});
+			expect(response.statusCode).toBe(200);
+			expect(response.json()).toEqual(cached);
+			expect(calls).toHaveLength(0);
+
+			await new Promise((resolve) => setTimeout(resolve, 20));
+			const row = db
+				.prepare("SELECT * FROM requests WHERE request_id = ?")
+				.get(response.headers["x-pg-request-id"]) as RequestsRow;
+			expect(row).toMatchObject({
+				cache_hit: 1,
+				input_tokens: 100,
+				// Gemini bills total - prompt, including hidden thinking: 114 - 100.
+				output_tokens: 14,
+				cost_micro_usd: 0,
+				cost_estimated: 0,
+			});
 		} finally {
 			await server.close();
 			db.close();
