@@ -794,7 +794,8 @@ describe("POST /v1/chat/completions — Gemini and DeepSeek routing (BUILD_PLAYB
 		seedApiKey(db);
 		// Official standard text rates: $0.30/Mtok ordinary input,
 		// $0.03/Mtok cached input, $2.50/Mtok output. With 400 cached,
-		// 600 uncached, and 10 output tokens: 12 + 180 + 25 = 217 micro-USD.
+		// 600 uncached, 10 visible output, and 3 hidden thinking tokens:
+		// 12 + 180 + 33 = 225 micro-USD.
 		seedPricing(db, "gemini-2.5-flash", 300_000, 2_500_000, {
 			provider: "gemini",
 			cachedInputRate: 30_000,
@@ -807,7 +808,7 @@ describe("POST /v1/chat/completions — Gemini and DeepSeek routing (BUILD_PLAYB
 					usage: {
 						prompt_tokens: 1_000,
 						completion_tokens: 10,
-						total_tokens: 1_010,
+						total_tokens: 1_013,
 						prompt_tokens_details: { cached_tokens: 400 },
 					},
 				}),
@@ -828,7 +829,7 @@ describe("POST /v1/chat/completions — Gemini and DeepSeek routing (BUILD_PLAYB
 
 			expect(response.statusCode).toBe(200);
 			expect(calls).toHaveLength(1);
-			expect(response.headers["x-pg-cost-usd"]).toBe("0.000217");
+			expect(response.headers["x-pg-cost-usd"]).toBe("0.000225");
 
 			await new Promise((resolve) => setTimeout(resolve, 20));
 			const requestId = response.headers["x-pg-request-id"] as string;
@@ -839,8 +840,8 @@ describe("POST /v1/chat/completions — Gemini and DeepSeek routing (BUILD_PLAYB
 			expect(row.provider).toBe("gemini");
 			expect(row.model).toBe("gemini-2.5-flash");
 			expect(row.input_tokens).toBe(1_000);
-			expect(row.output_tokens).toBe(10);
-			expect(row.cost_micro_usd).toBe(217);
+			expect(row.output_tokens).toBe(13);
+			expect(row.cost_micro_usd).toBe(225);
 			expect(row.cost_estimated).toBe(0);
 			expect(row.status).toBe("ok");
 		} finally {

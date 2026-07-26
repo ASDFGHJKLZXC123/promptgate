@@ -41,6 +41,50 @@ describe("ChatResponseSchema", () => {
 		expect(result.success).toBe(true);
 	});
 
+	test("accepts Gemini usage whose total includes hidden thinking output", () => {
+		const result = ChatResponseSchema.safeParse({
+			id: "chatcmpl-1",
+			object: "chat.completion",
+			created: 1_700_000_000,
+			model: "gemini-2.5-flash",
+			choices: [
+				{
+					index: 0,
+					message: { role: "assistant", content: "hi" },
+					finish_reason: "stop",
+				},
+			],
+			usage: {
+				prompt_tokens: 3,
+				completion_tokens: 2,
+				total_tokens: 28,
+			},
+		});
+		expect(result.success).toBe(true);
+	});
+
+	test("rejects usage whose total is smaller than prompt plus completion", () => {
+		const result = ChatResponseSchema.safeParse({
+			id: "chatcmpl-1",
+			object: "chat.completion",
+			created: 1_700_000_000,
+			model: "gpt-5.6-terra",
+			choices: [
+				{
+					index: 0,
+					message: { role: "assistant", content: "hi" },
+					finish_reason: "stop",
+				},
+			],
+			usage: {
+				prompt_tokens: 10,
+				completion_tokens: 5,
+				total_tokens: 14,
+			},
+		});
+		expect(result.success).toBe(false);
+	});
+
 	test("allows a null finish_reason (in-progress / provider-specific)", () => {
 		const result = ChatResponseSchema.safeParse({
 			id: "chatcmpl-1",

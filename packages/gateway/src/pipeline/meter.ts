@@ -47,6 +47,22 @@ function estimateCompletionTokens(response: ChatResponse): number {
 }
 
 /**
+ * Gemini's OpenAI-compatible response can report visible candidates in
+ * `completion_tokens` while `total_tokens` also includes hidden thinking
+ * output. Google bills candidates + thinking at the output rate, so Gemini's
+ * billable output is the reconciled total minus prompt input. Other approved
+ * providers already include reasoning inside `completion_tokens`.
+ */
+function exactOutputTokens(
+	usage: NonNullable<ChatResponse["usage"]>,
+	pricing: NonNullable<ReturnType<typeof findCurrentPricing>>,
+): number {
+	return pricing.provider === "gemini"
+		? usage.total_tokens - usage.prompt_tokens
+		: usage.completion_tokens;
+}
+
+/**
  * Prices the input side of a request (IMPLEMENTATION_GUIDE.md §3.5, extended
  * by BUILD_PLAYBOOK.md phase 1 step 9's cache-split metering, 2026-07-25):
  * when the provider reported a validated cache split AND the model's pricing
@@ -115,7 +131,9 @@ export function meterUsage(
 	const inputTokens =
 		response.usage?.prompt_tokens ?? estimatePromptTokens(req);
 	const outputTokens =
-		response.usage?.completion_tokens ?? estimateCompletionTokens(response);
+		response.usage === undefined
+			? estimateCompletionTokens(response)
+			: exactOutputTokens(response.usage, pricing);
 
 	const costMicroUsd =
 		priceInputTokens(response.usage, inputTokens, pricing) +

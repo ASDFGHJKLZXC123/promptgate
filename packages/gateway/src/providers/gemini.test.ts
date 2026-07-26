@@ -25,7 +25,8 @@ const FAKE_RESPONSE_BODY = {
 	usage: {
 		prompt_tokens: 3,
 		completion_tokens: 1,
-		total_tokens: 4,
+		// Gemini includes three hidden thinking tokens in the total.
+		total_tokens: 7,
 		prompt_tokens_details: { cached_tokens: 1 },
 	},
 };
@@ -150,6 +151,7 @@ test("validates and returns a successful response with usage", async () => {
 	expect(result).toEqual(FAKE_RESPONSE_BODY);
 	expect(result.usage?.prompt_tokens).toBe(3);
 	expect(result.usage?.completion_tokens).toBe(1);
+	expect(result.usage?.total_tokens).toBe(7);
 	expect(result.usage?.prompt_tokens_details?.cached_tokens).toBe(1);
 });
 

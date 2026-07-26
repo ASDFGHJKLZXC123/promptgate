@@ -186,7 +186,9 @@ test("derives Gemini cache misses from prompt_tokens_details and meters the thre
 			usage: {
 				prompt_tokens: 1_000,
 				completion_tokens: 10,
-				total_tokens: 1_010,
+				// Gemini's compatible completion count is visible output only;
+				// the total includes three additional billable thinking tokens.
+				total_tokens: 1_013,
 				prompt_tokens_details: { cached_tokens: 400 },
 			},
 		}),
@@ -194,11 +196,11 @@ test("derives Gemini cache misses from prompt_tokens_details and meters the thre
 
 	// round(400 * 30_000 / 1e6) = 12
 	// round(600 * 300_000 / 1e6) = 180
-	// round(10 * 2_500_000 / 1e6) = 25
+	// round((10 visible + 3 thinking) * 2_500_000 / 1e6) = 33
 	expect(result).toEqual({
 		inputTokens: 1_000,
-		outputTokens: 10,
-		costMicroUsd: 12 + 180 + 25,
+		outputTokens: 13,
+		costMicroUsd: 12 + 180 + 33,
 		costEstimated: false,
 	});
 });

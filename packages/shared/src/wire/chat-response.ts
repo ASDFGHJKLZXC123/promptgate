@@ -30,6 +30,14 @@ export const ChatUsageSchema = z
 	})
 	.refine(
 		(usage) =>
+			usage.total_tokens >= usage.prompt_tokens + usage.completion_tokens,
+		{
+			message:
+				"total_tokens must be at least prompt_tokens + completion_tokens.",
+		},
+	)
+	.refine(
+		(usage) =>
 			(usage.prompt_cache_hit_tokens === undefined) ===
 			(usage.prompt_cache_miss_tokens === undefined),
 		{
