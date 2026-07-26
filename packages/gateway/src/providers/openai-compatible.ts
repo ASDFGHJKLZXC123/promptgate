@@ -5,6 +5,7 @@ import {
 	stripPgFields,
 } from "@promptgate/shared";
 
+import { streamOpenAiCompatible } from "./openai-compatible-stream.js";
 import { ProviderConfigError, ProviderError } from "./provider-error.js";
 import {
 	defaultRetryDeps,
@@ -98,9 +99,19 @@ export function createOpenAiCompatibleAdapter(
 			return ChatResponseSchema.parse(await response.json());
 		},
 
-		stream(_req: ChatRequest, _signal: AbortSignal): AsyncIterable<SseChunk> {
-			throw new Error(
-				`${config.label} streaming is not implemented until Phase 2 (BUILD_PLAYBOOK.md).`,
+		stream(req: ChatRequest, signal: AbortSignal): AsyncIterable<SseChunk> {
+			return streamOpenAiCompatible(
+				{
+					name: config.name,
+					label: config.label,
+					url: config.url,
+					apiKey: config.apiKey,
+					missingKeyMessage: config.missingKeyMessage,
+					retryDeps,
+					extraRetryStatuses: config.extraRetryStatuses ?? [],
+				},
+				req,
+				signal,
 			);
 		},
 	};

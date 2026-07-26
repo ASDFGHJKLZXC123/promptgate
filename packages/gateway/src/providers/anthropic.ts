@@ -4,7 +4,11 @@ import {
 	fromAnthropicResponse,
 	toAnthropicRequest,
 } from "./anthropic-translate.js";
-import { ProviderConfigError, ProviderError } from "./provider-error.js";
+import {
+	ProviderConfigError,
+	ProviderError,
+	StreamNotImplementedError,
+} from "./provider-error.js";
 import {
 	defaultRetryDeps,
 	fetchWithRetry,
@@ -115,7 +119,11 @@ export function createAnthropicAdapter(
 		},
 
 		stream(_req: ChatRequest, _signal: AbortSignal): AsyncIterable<SseChunk> {
-			throw new Error(
+			// Anthropic SSE translation lands in phase 2 step 4; until then a
+			// streaming request must fail cleanly, never crash the pipeline. The
+			// typed error maps to a safe 501 (BUILD_PLAYBOOK.md phase 2 step 3).
+			throw new StreamNotImplementedError(
+				"anthropic",
 				"Anthropic streaming is not implemented until Phase 2 step 4 (BUILD_PLAYBOOK.md).",
 			);
 		},

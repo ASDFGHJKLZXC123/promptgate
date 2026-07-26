@@ -334,10 +334,50 @@ test("propagates abort without retrying", async () => {
 	expect(fetch).toHaveBeenCalledTimes(1);
 });
 
-test("stream() throws synchronously as not-yet-supported until Phase 2", () => {
-	const adapter = createDeepSeekAdapter({ apiKey: "sk-deepseek-test-key" });
+function sseResponse(text: string): Response {
+	const body = new ReadableStream<Uint8Array>({
+		start(controller) {
+			controller.enqueue(new TextEncoder().encode(text));
+			controller.close();
+		},
+	});
+	return new Response(body, {
+		status: 200,
+		headers: { "content-type": "text/event-stream" },
+	});
+}
 
-	expect(() =>
-		adapter.stream(FAKE_REQUEST, new AbortController().signal),
-	).toThrow(/Phase 2/);
+const DEEPSEEK_STREAM =
+	'data: {"id":"c","object":"chat.completion.chunk","created":1,"model":"deepseek-v4-flash","choices":[{"index":0,"delta":{"reasoning_content":"think"},"finish_reason":null}],"usage":null}\n\n' +
+	'data: {"id":"c","object":"chat.completion.chunk","created":1,"model":"deepseek-v4-flash","choices":[{"index":0,"delta":{"content":"hi"},"finish_reason":null}],"usage":null}\n\n' +
+	'data: {"id":"c","object":"chat.completion.chunk","created":1,"model":"deepseek-v4-flash","choices":[],"usage":{"prompt_tokens":10,"completion_tokens":2,"total_tokens":12,"prompt_cache_hit_tokens":6,"prompt_cache_miss_tokens":4}}\n\n' +
+	"data: [DONE]\n";
+
+test("stream() forwards a DeepSeek transcript (reasoning + cache usage preserved) to the official endpoint", async () => {
+	const fetch = vi.fn().mockResolvedValue(sseResponse(DEEPSEEK_STREAM));
+	const adapter = createDeepSeekAdapter({
+		apiKey: "sk-deepseek-test-key",
+		retryDeps: noRetryDeps(fetch),
+	});
+
+	const datas: string[] = [];
+	for await (const chunk of adapter.stream(
+		FAKE_REQUEST,
+		new AbortController().signal,
+	)) {
+		datas.push(chunk.data);
+	}
+
+	const [url, init] = fetch.mock.calls[0] as [string, RequestInit];
+	expect(url).toBe("https://api.deepseek.com/v1/chat/completions");
+	expect(init.headers).toMatchObject({
+		authorization: "Bearer sk-deepseek-test-key",
+	});
+	expect(JSON.parse(init.body as string).stream_options).toEqual({
+		include_usage: true,
+	});
+	// reasoning_content chunk + cache-hit/miss usage are forwarded verbatim.
+	expect(datas[0]).toContain("reasoning_content");
+	expect(datas.at(-2)).toContain("prompt_cache_hit_tokens");
+	expect(datas.at(-1)).toBe("[DONE]");
 });

@@ -291,10 +291,45 @@ test("propagates abort without retrying", async () => {
 	expect(fetch).toHaveBeenCalledTimes(1);
 });
 
-test("stream() throws synchronously as not-yet-supported until Phase 2", () => {
-	const adapter = createGeminiAdapter({ apiKey: "gm-test-key" });
+function sseResponse(text: string): Response {
+	const body = new ReadableStream<Uint8Array>({
+		start(controller) {
+			controller.enqueue(new TextEncoder().encode(text));
+			controller.close();
+		},
+	});
+	return new Response(body, {
+		status: 200,
+		headers: { "content-type": "text/event-stream" },
+	});
+}
 
-	expect(() =>
-		adapter.stream(FAKE_REQUEST, new AbortController().signal),
-	).toThrow(/Phase 2/);
+const GEMINI_STREAM =
+	'data: {"id":"c","object":"chat.completion.chunk","created":1,"model":"gemini-2.5-flash","choices":[{"index":0,"delta":{"content":"hi"},"finish_reason":null}],"usage":null}\n\n' +
+	'data: {"id":"c","object":"chat.completion.chunk","created":1,"model":"gemini-2.5-flash","choices":[],"usage":{"prompt_tokens":1024,"completion_tokens":12,"total_tokens":1059,"prompt_tokens_details":{"cached_tokens":896}}}\n\n' +
+	"data: [DONE]\n";
+
+test("stream() forwards a Gemini transcript (cached_tokens preserved) to the official endpoint", async () => {
+	const fetch = vi.fn().mockResolvedValue(sseResponse(GEMINI_STREAM));
+	const adapter = createGeminiAdapter({
+		apiKey: "gm-test-key",
+		retryDeps: noRetryDeps(fetch),
+	});
+
+	const datas: string[] = [];
+	for await (const chunk of adapter.stream(
+		FAKE_REQUEST,
+		new AbortController().signal,
+	)) {
+		datas.push(chunk.data);
+	}
+
+	const [url, init] = fetch.mock.calls[0] as [string, RequestInit];
+	expect(url).toBe(
+		"https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
+	);
+	expect(init.headers).toMatchObject({ authorization: "Bearer gm-test-key" });
+	expect(JSON.parse(init.body as string).stream).toBe(true);
+	expect(datas.at(-2)).toContain("cached_tokens");
+	expect(datas.at(-1)).toBe("[DONE]");
 });

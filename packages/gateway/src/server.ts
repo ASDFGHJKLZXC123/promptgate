@@ -8,6 +8,7 @@ import { openDatabase } from "./db/index.js";
 import { migrate } from "./db/migrate.js";
 import { registerClientAuth } from "./pipeline/auth.js";
 import {
+	type Clock,
 	type ProviderAdapterRegistry,
 	registerChatCompletionsRoute,
 } from "./pipeline/handler.js";
@@ -26,6 +27,12 @@ export interface BuildServerOptions {
 	 * default wiring in phase 2 step 2 (non-streaming).
 	 */
 	adapters?: ProviderAdapterRegistry;
+	/**
+	 * Monotonic millisecond clock for request latency, injected so tests can
+	 * drive deterministic `first_token_ms`/`total_ms` (BUILD_PLAYBOOK.md phase 2
+	 * step 3). Defaults to `performance.now()`.
+	 */
+	now?: Clock;
 }
 
 export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
@@ -67,7 +74,7 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
 	server.register(
 		(v1Server) => {
 			registerClientAuth(v1Server, db);
-			registerChatCompletionsRoute(v1Server, db, adapters);
+			registerChatCompletionsRoute(v1Server, db, adapters, options.now);
 			registerModelsRoute(v1Server, db);
 		},
 		{ prefix: "/v1" },

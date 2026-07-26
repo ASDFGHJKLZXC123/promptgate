@@ -436,12 +436,27 @@ describe("POST /v1/chat/completions — auth, validation, unknown model, streami
 		}
 	});
 
-	test("rejects stream:true cleanly without invoking the adapter", async () => {
+	test("routes stream:true to the adapter's streaming path (phase 2 step 3), not the non-streaming complete()", async () => {
 		const db = openTestDb();
 		seedApiKey(db);
 		seedPricing(db, "gpt-test-estimate", 1_000_000, 2_000_000);
-		const { adapter, calls } = fakeAdapter(async () => fakeChatResponse());
-		const server = await buildTestServer({ openai: adapter });
+		const { calls } = fakeAdapter(async () => fakeChatResponse());
+		// A streaming-capable fake: complete() must NOT be called for stream:true.
+		const streamingAdapter: ProviderAdapter = {
+			name: "openai",
+			async complete(req) {
+				calls.push(req);
+				return fakeChatResponse();
+			},
+			async *stream() {
+				yield {
+					data: '{"id":"c","object":"chat.completion.chunk","created":1,"model":"gpt-test-estimate","choices":[],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}',
+					done: false,
+				};
+				yield { data: "[DONE]", done: true };
+			},
+		};
+		const server = await buildTestServer({ openai: streamingAdapter });
 
 		try {
 			const response = await server.inject({
@@ -455,10 +470,11 @@ describe("POST /v1/chat/completions — auth, validation, unknown model, streami
 				}),
 			});
 
-			expect(response.statusCode).toBe(400);
-			expect((response.json() as OpenAIErrorResponse).error.code).toBe(
-				"invalid_request_error",
-			);
+			expect(response.statusCode).toBe(200);
+			expect(response.headers["content-type"]).toContain("text/event-stream");
+			expect(response.headers["x-pg-cost-usd"]).toBeUndefined();
+			expect(response.payload.trimEnd().endsWith("data: [DONE]")).toBe(true);
+			// The non-streaming complete() path was never taken.
 			expect(calls).toHaveLength(0);
 		} finally {
 			await server.close();

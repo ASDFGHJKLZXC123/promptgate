@@ -1,7 +1,10 @@
-import type { ChatRequest, ChatResponse } from "@promptgate/shared";
+import type { ChatRequest, ChatResponse, ChatUsage } from "@promptgate/shared";
 import type Database from "better-sqlite3";
 
-import { findCurrentPricing } from "../providers/pricing.dao.js";
+import {
+	findCurrentPricing,
+	type ModelPricingRow,
+} from "../providers/pricing.dao.js";
 
 export interface MeterResult {
 	inputTokens: number;
@@ -55,7 +58,7 @@ function estimateCompletionTokens(response: ChatResponse): number {
  */
 function exactOutputTokens(
 	usage: NonNullable<ChatResponse["usage"]>,
-	pricing: NonNullable<ReturnType<typeof findCurrentPricing>>,
+	pricing: ModelPricingRow,
 ): number {
 	return pricing.provider === "gemini"
 		? usage.total_tokens - usage.prompt_tokens
@@ -75,7 +78,7 @@ function exactOutputTokens(
 function priceInputTokens(
 	usage: ChatResponse["usage"],
 	inputTokens: number,
-	pricing: NonNullable<ReturnType<typeof findCurrentPricing>>,
+	pricing: ModelPricingRow,
 ): number {
 	const detailedCacheHitTokens = usage?.prompt_tokens_details?.cached_tokens;
 	const cacheHitTokens =
@@ -105,6 +108,35 @@ function priceInputTokens(
 	);
 }
 
+function requirePricing(db: Database.Database, model: string): ModelPricingRow {
+	const pricing = findCurrentPricing(db, model);
+	if (!pricing) {
+		throw new Error(
+			`No effective model_pricing row for "${model}" — resolveProvider should have rejected this request first.`,
+		);
+	}
+	return pricing;
+}
+
+/**
+ * Prices an exact usage report (IMPLEMENTATION_GUIDE.md §3.5): provider-
+ * specific output normalization (Gemini's hidden-thinking total), the
+ * cache-aware input split (DeepSeek hit/miss, Gemini cached_tokens), and the
+ * ordinary output rate — each component rounded before summing. Shared by the
+ * non-streaming and streaming paths so both apply the identical rules.
+ */
+function meterExactUsage(
+	usage: ChatUsage,
+	pricing: ModelPricingRow,
+): MeterResult {
+	const inputTokens = usage.prompt_tokens;
+	const outputTokens = exactOutputTokens(usage, pricing);
+	const costMicroUsd =
+		priceInputTokens(usage, inputTokens, pricing) +
+		Math.round((outputTokens * pricing.output_micro_usd_per_mtok) / 1_000_000);
+	return { inputTokens, outputTokens, costMicroUsd, costEstimated: false };
+}
+
 /**
  * Meters a completed non-streaming exchange (BUILD_PLAYBOOK.md phase 1 step
  * 7): exact tokens from provider `usage` when present, otherwise the
@@ -120,24 +152,30 @@ export function meterUsage(
 	req: ChatRequest,
 	response: ChatResponse,
 ): MeterResult {
-	const pricing = findCurrentPricing(db, model);
-	if (!pricing) {
-		throw new Error(
-			`No effective model_pricing row for "${model}" — resolveProvider should have rejected this request first.`,
-		);
+	const pricing = requirePricing(db, model);
+	if (response.usage !== undefined) {
+		return meterExactUsage(response.usage, pricing);
 	}
 
-	const costEstimated = response.usage === undefined;
-	const inputTokens =
-		response.usage?.prompt_tokens ?? estimatePromptTokens(req);
-	const outputTokens =
-		response.usage === undefined
-			? estimateCompletionTokens(response)
-			: exactOutputTokens(response.usage, pricing);
-
+	const inputTokens = estimatePromptTokens(req);
+	const outputTokens = estimateCompletionTokens(response);
 	const costMicroUsd =
-		priceInputTokens(response.usage, inputTokens, pricing) +
+		priceInputTokens(undefined, inputTokens, pricing) +
 		Math.round((outputTokens * pricing.output_micro_usd_per_mtok) / 1_000_000);
+	return { inputTokens, outputTokens, costMicroUsd, costEstimated: true };
+}
 
-	return { inputTokens, outputTokens, costMicroUsd, costEstimated };
+/**
+ * Meters a completed stream from its captured terminal usage chunk
+ * (BUILD_PLAYBOOK.md phase 2 step 3). Streaming always fails closed without a
+ * terminal usage chunk, so there is no estimate fallback here — the exact
+ * provider-specific Gemini/DeepSeek rules apply, identical to the non-streaming
+ * exact path.
+ */
+export function meterStreamUsage(
+	db: Database.Database,
+	model: string,
+	usage: ChatUsage,
+): MeterResult {
+	return meterExactUsage(usage, requirePricing(db, model));
 }

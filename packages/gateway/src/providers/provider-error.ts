@@ -60,3 +60,40 @@ export class ProviderConfigError extends Error {
 		this.provider = provider;
 	}
 }
+
+/**
+ * Thrown when a streaming provider's SSE transcript violates the
+ * OpenAI-compatible contract (BUILD_PLAYBOOK.md phase 2 step 3): malformed
+ * JSON, a wrong `chat.completion.chunk` identity, invalid or
+ * duplicate/missing terminal usage, a frame after `[DONE]`, a missing
+ * `[DONE]`, or a truncated stream. If it surfaces before any bytes reach the
+ * client the pipeline maps it to a safe `provider_error` JSON envelope; once
+ * streaming has started the pipeline closes the stream and marks the request
+ * `provider_error`. The `message` is always client-safe and never echoes the
+ * offending upstream payload.
+ */
+export class StreamContractError extends Error {
+	readonly provider: ProviderName;
+
+	constructor(provider: ProviderName, message: string) {
+		super(message);
+		this.name = "StreamContractError";
+		this.provider = provider;
+	}
+}
+
+/**
+ * Thrown by an adapter whose streaming path is not implemented yet — currently
+ * only Anthropic, whose SSE translation lands in phase 2 step 4. The pipeline
+ * maps this to a safe 501 `provider_error` so a configured Anthropic streaming
+ * request fails cleanly instead of crashing (BUILD_PLAYBOOK.md phase 2 step 3).
+ */
+export class StreamNotImplementedError extends Error {
+	readonly provider: ProviderName;
+
+	constructor(provider: ProviderName, message: string) {
+		super(message);
+		this.name = "StreamNotImplementedError";
+		this.provider = provider;
+	}
+}

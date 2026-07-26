@@ -247,10 +247,47 @@ test("propagates abort without retrying", async () => {
 	expect(fetch).toHaveBeenCalledTimes(1);
 });
 
-test("stream() throws synchronously as not-yet-supported until Phase 2", () => {
-	const adapter = createOpenAiAdapter({ apiKey: "sk-test-key" });
+function sseResponse(text: string): Response {
+	const body = new ReadableStream<Uint8Array>({
+		start(controller) {
+			controller.enqueue(new TextEncoder().encode(text));
+			controller.close();
+		},
+	});
+	return new Response(body, {
+		status: 200,
+		headers: { "content-type": "text/event-stream" },
+	});
+}
 
-	expect(() =>
-		adapter.stream(FAKE_REQUEST, new AbortController().signal),
-	).toThrow(/Phase 2/);
+const OPENAI_STREAM =
+	'data: {"id":"c","object":"chat.completion.chunk","created":1,"model":"gpt-5.6-luna","choices":[{"index":0,"delta":{"content":"hi"},"finish_reason":null}],"usage":null}\n\n' +
+	'data: {"id":"c","object":"chat.completion.chunk","created":1,"model":"gpt-5.6-luna","choices":[],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}\n\n' +
+	"data: [DONE]\n";
+
+test("stream() forwards an OpenAI-compatible transcript, forcing streaming and swapping auth", async () => {
+	const fetch = vi.fn().mockResolvedValue(sseResponse(OPENAI_STREAM));
+	const adapter = createOpenAiAdapter({
+		apiKey: "sk-test-key",
+		retryDeps: noRetryDeps(fetch),
+	});
+
+	const datas: string[] = [];
+	let terminated = false;
+	for await (const chunk of adapter.stream(
+		FAKE_REQUEST,
+		new AbortController().signal,
+	)) {
+		datas.push(chunk.data);
+		terminated = chunk.done;
+	}
+
+	const [url, init] = fetch.mock.calls[0] as [string, RequestInit];
+	expect(url).toBe("https://api.openai.com/v1/chat/completions");
+	expect(init.headers).toMatchObject({ authorization: "Bearer sk-test-key" });
+	const sent = JSON.parse(init.body as string);
+	expect(sent.stream).toBe(true);
+	expect(sent.stream_options).toEqual({ include_usage: true });
+	expect(datas.at(-1)).toBe("[DONE]");
+	expect(terminated).toBe(true);
 });
