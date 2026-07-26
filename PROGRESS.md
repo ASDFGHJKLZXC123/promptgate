@@ -2,10 +2,10 @@
 
 > Maintained by the orchestrator (see `ORCHESTRATOR.md`). Updated after every step. Humans: the Position line is always the truth.
 
-**Position:** Phase 0 — done and human-approved; Phase 1 — verify pending (provider dashboard comparison)
-**Last session:** 2026-07-25 — the literal Phase 1 Verify block passed live Gemini and DeepSeek calls with exact persisted published-rate costs, but an independent gate audit correctly held the account-dashboard comparison open
-**Repo state at last update:** Phase 1 implementation, local verification, Docker health, live calls, and published-rate reconciliation are complete; provider account-dashboard evidence remains blocked by browser site-use settings; Phase 2 has not started
-**Last commit:** phase-1 verify: record dashboard blocker (this commit) · **Last green `pnpm lint && pnpm test`:** 2026-07-25 (20 test files, 204 tests passed)
+**Position:** Phase 0 — done and human-approved; Phase 1 — awaiting approval
+**Last session:** 2026-07-25 — the project owner approved official published-rate reconciliation plus persisted micro-USD rows as the Phase 1 cost evidence, resolving the final verification blocker
+**Repo state at last update:** Phase 1 implementation and verification are complete; every acceptance criterion passes under the human-approved evidence amendment, completion evidence is captured, and Phase 2 has not started
+**Last commit:** phase-1 verify: complete the published-rate gate (this commit) · **Last green `pnpm lint && pnpm test`:** 2026-07-25 (20 test files, 204 tests passed)
 
 ## Phase status
 
@@ -14,7 +14,7 @@ Model/effort per ORCHESTRATOR.md → Model & effort assignment.
 | Phase | Name | Implementer | Status | Verify evidence | Approved by human |
 |---|---|---|---|---|---|
 | 0 | Scaffold | GPT-5.3-Codex-Spark / xhigh; Terra / medium for DB+Docker | done | `docs/evidence/phase-0.md` | project owner — 2026-07-16 |
-| 1 | OpenAI-compatible non-streaming | Claude Sonnet 5 / high; Spark+Luna support; Sol / xhigh expansion audit | verify pending | `docs/evidence/phase-1.md` | — |
+| 1 | OpenAI-compatible non-streaming | Claude Sonnet 5 / high; Spark+Luna support; Sol / xhigh expansion audit | awaiting approval | `docs/evidence/phase-1.md` | — |
 | 2 | Anthropic + four-provider streaming | Claude Opus 4.8 / xhigh; Luna fixtures; Sol / xhigh checkpoint | not started | — | — |
 | 3 | Cache, limits, budgets | GPT-5.6 Terra / high; Sol / xhigh budget audit | not started | — | — |
 | 4 | Prompt registry | GPT-5.6 Terra / high; Spark support | not started | — | — |
@@ -40,7 +40,7 @@ Status values: `not started` · `in progress (step K)` · `verify pending` · `a
 
 ## Blockers (current)
 
-- Phase 1 account-dashboard reconciliation: the live Gemini and DeepSeek rows exactly match their official published-rate formulas, but the playbook separately requires comparison with each provider dashboard to four decimal places. The API keys expose no per-request billing artifact, and both dashboard sites are disabled by the user's browser site-use settings. Resolve with user-supplied dashboard evidence or a human-approved acceptance amendment that accepts the published-rate reconciliation.
+- none
 
 ## TODO(verify) resolutions
 
@@ -64,6 +64,7 @@ Small choices the spec didn't cover (architectural ones go to the human instead 
 
 | Date | Decision | Rationale |
 |---|---|---|
+| 2026-07-25 | The project owner approved independently recorded official published-rate reconciliation plus persisted integer micro-USD rows as the Phase 1 cost evidence in place of provider account-dashboard artifacts. The Phase 1 acceptance table and Verify wording now state this exact requirement. | Both live calls expose sufficient usage to reproduce exact component-rounded cost, while the API keys expose no per-request billing-console artifact and browser site-use settings prevent dashboard inspection. The approved evidence remains stricter than a four-decimal display alone because it preserves exact integer micro-USD amounts and calculation inputs. |
 | 2026-07-25 | Normalize billable/logged Gemini output tokens to `usage.total_tokens - usage.prompt_tokens`, while forwarding the provider's original compatible response unchanged; OpenAI and DeepSeek continue using `completion_tokens`. Reject usage where `total_tokens < prompt_tokens + completion_tokens`. | The first current-image live Verify returned Gemini usage `{prompt: 3, completion: 2, total: 28}`: the compatibility response's visible completion omitted 23 hidden thinking tokens that Google bills at the output rate. Provider-specific normalization produces the official candidate-plus-thinking billable count without double-counting DeepSeek/OpenAI reasoning, whose completion totals already reconcile. |
 | 2026-07-25 | Applied the owner's pre-verify model correction by retaining `gemini-2.5-flash-lite` and adding `gemini-2.5-flash` as the Gemini verification/eval target at the approved standard rates: 300000 ordinary input, 30000 cached input, and 2500000 output micro-USD/Mtok. Validated Gemini's compatible `prompt_tokens_details.cached_tokens`, reconciled it with DeepSeek's explicit pair when both appear, and derived uncached input for independent three-component rounding. | Keeping Flash-Lite avoids deleting a valid supported model or consuming a migration solely for cleanup. Official standard pricing differs materially from Flash-Lite, so a new exact row and cache-aware wire/meter path are required. Direct bounded calls returned HTTP 200 for the owner's Gemini and DeepSeek keys with the requested model IDs; the gateway phase verify remains pending. |
 | 2026-07-25 | Completed the four-provider routing seam by requiring prefix and current pricing provider to agree, default-wiring OpenAI/Gemini/DeepSeek while leaving Anthropic for Phase 2, and keeping `/v1/models` sourced only from current pricing regardless of provider-key availability. Pinned `openai@6.49.0` as a root dev dependency for the literal SDK verification. | Provider/pricing agreement prevents a model from being routed under another provider's rate. Optional keys still permit boot and model discovery; only a call to an unconfigured provider fails. Offline default-wiring, model-list, mismatch, and exact Gemini/DeepSeek metering/logging tests prove the integration without live provider traffic. |
@@ -101,6 +102,7 @@ Small choices the spec didn't cover (architectural ones go to the human instead 
 
 | Date | Covered | Ended at |
 |---|---|---|
+| 2026-07-25 | Human-approved Phase 1 cost-evidence amendment — accepted independently recorded official published-rate reconciliation plus persisted integer micro-USD rows in place of provider account-dashboard artifacts. Updated the Phase 1 acceptance table, literal Verify outcome requirement, completion evidence, decision log, and current position without changing the already-run Verify block or any code. The prior independent audit's only blocker is resolved; all Phase 1 acceptance criteria now pass. | Phase 1 completion gate — awaiting explicit human approval |
 | 2026-07-25 | Phase 1 verification checkpoint — rebuilt the current Docker image, seeded the root mounted database explicitly, and ran the amended Verify block literally. The same pinned OpenAI SDK client returned valid live responses through Gemini 2.5 Flash and DeepSeek V4 Flash; rows persisted as Gemini 3 input/27 billable output/69 micro-USD/ok and DeepSeek 6 input/60 output/18 micro-USD/ok. OpenAI was explicitly deferred because its key is absent, Anthropic was explicitly deferred to Phase 2, Docker remained healthy with HTTP 200, and final lint, 204 tests, strict build, and diff checks passed. An independent gate audit correctly held the separate account-dashboard comparison open; browser access to both dashboards is disabled by the user's site-use settings. Evidence: `docs/evidence/phase-1.md`. | Phase 1 — verify pending on provider dashboard evidence or approved acceptance amendment |
 | 2026-07-25 | Phase 1 live verification correction — the first literal run reused a stale Docker image and returned local 404s without provider calls or request rows; after an explicit current-commit image rebuild, the unchanged block reached both providers. DeepSeek logged 6 input/49 output/15 micro-USD correctly; Gemini exposed hidden-thinking underbilling by returning 3 prompt/2 visible completion/28 total while the row logged only 2 output/6 micro-USD. Added validated total reconciliation, Gemini-only candidate-plus-thinking normalization, exact cached/thinking integration and persistence tests, authority-document updates, 69 focused tests, 204 total tests, lint, build, and GPT-5.6 Sol / xhigh `APPROVE`. | Phase 1 — verify rerun pending |
 | 2026-07-25 | Human-approved Phase 1 pre-verify correction — retained Gemini 2.5 Flash-Lite support; added and pinned Gemini 2.5 Flash with official standard and cached-input pricing; validated/reconciled compatible Gemini/DeepSeek cache fields; exact Gemini cached-input metering through adapter, pipeline, response header, and persisted request row; updated verify/eval documentation; direct Gemini and DeepSeek credential/model checks returned HTTP 200; 107 focused tests, 202 total tests, lint, and build. GPT-5.6 Sol / xhigh requested full DeepSeek dual-field adapter/persistence evidence before approval, which was added. | Phase 1 — verify pending |

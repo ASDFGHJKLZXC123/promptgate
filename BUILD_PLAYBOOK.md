@@ -7,7 +7,7 @@ Ordered so every phase ends with something demoable; each is roughly a focused w
 | # | Phase | Scope | Acceptance criteria |
 |---|---|---|---|
 | 0 | Scaffold | monorepo, Biome/Vitest/tsconfig, migration runner, docker-compose, `ci.yml` (lint+unit) | `docker compose up` → `GET /healthz` 200; CI green on empty test |
-| 1 | OpenAI-compatible non-streaming | auth keys, four-provider taxonomy/pricing, OpenAI + Gemini + DeepSeek adapters, routing, non-streaming proxy, metering, `requests` logging | the same OpenAI SDK client reaches each configured phase-1 provider; every live row has tokens + cost matching that provider's dashboard; unavailable activation checks are named as deferred |
+| 1 | OpenAI-compatible non-streaming | auth keys, four-provider taxonomy/pricing, OpenAI + Gemini + DeepSeek adapters, routing, non-streaming proxy, metering, `requests` logging | the same OpenAI SDK client reaches each configured phase-1 provider; every live row has tokens + persisted micro-USD cost matching the provider's official published rates; unavailable activation checks are named as deferred |
 | 2 | Anthropic + four-provider streaming | Anthropic adapter (§3.2 incl. `response_format` translation), SSE streaming parity across all four providers, first-token latency, abort handling | the same client streams through every configured provider; usage/cost is exact when reported; unavailable live checks are deferred explicitly; `TODO(verify)` on tools resolved |
 | 3 | Cache, limits, budgets | exact-match cache (incl. stream replay), token bucket, budget check, error taxonomy | identical request twice → second is `x-pg-cache: hit`, cost 0, no provider call; key over budget → 429 `budget_exceeded`; over rpm → 429 `rate_limited` |
 | 4 | Prompt registry | schema `004_registry.sql`, immutability trigger, `pg_prompt`/`pg_vars` resolution, admin endpoints, diff + labels | create v1/v2, point `prod` at v1, request via `pg_prompt: x@prod` uses v1; move label → next request uses v2 with no client change; diff endpoint returns sane unified diff |
@@ -181,7 +181,7 @@ verify_model OPENAI_API_KEY gpt-5.6-luna
 echo "DEFERRED claude-sonnet-5: Anthropic adapter is Phase 2"
 sqlite3 data/promptgate.db "SELECT model, input_tokens, output_tokens, cost_micro_usd, status FROM requests ORDER BY id DESC LIMIT 3;"
 ```
-Every executed call must return a correct response. Its row must be `status='ok'`, contain non-null tokens/cost, and its cost (÷1e6 for USD) must match the provider dashboard to the 4th decimal.
+Every executed call must return a correct response. Its row must be `status='ok'`, contain non-null tokens/cost, and its persisted micro-USD cost (÷1e6 for USD) must match an independently recorded calculation from the provider's official published rates to the 4th decimal. **Human-approved Phase 1 evidence amendment (2026-07-25):** this published-rate reconciliation plus the persisted row is the required Phase 1 cost evidence in place of a provider account-dashboard artifact.
 
 ### Phase 2 — Anthropic adapter + four-provider streaming
 

@@ -2,8 +2,7 @@
 
 Date: 2026-07-25
 
-Status: **partial pass — provider dashboard comparison pending**. Phase 2 has
-not started.
+Status: **pass — awaiting human approval**. Phase 2 has not started.
 
 ## Numbered commit sequence
 
@@ -153,11 +152,11 @@ rates were checked against the official
 | DeepSeek | cache hit `round(0 × 2800 / 1e6) = 0`; cache miss `round(6 × 140000 / 1e6) = 1`; output `round(60 × 280000 / 1e6) = 17` | `18` micro-USD | `$0.0000` |
 
 These amounts match the providers' published rates to the required fourth
-decimal. Published-rate arithmetic and persisted rows do not, by themselves,
-prove the playbook's separate requirement to compare against each provider's
-account dashboard. The API keys do not expose a per-request billing-console
-artifact, and dashboard access is disabled by the user's browser site-use
-settings. That comparison therefore remains pending.
+decimal. On 2026-07-25, the project owner explicitly approved the independently
+recorded official published-rate reconciliation plus persisted micro-USD rows
+as the Phase 1 cost evidence in place of provider account-dashboard artifacts.
+The acceptance criterion is therefore satisfied without overstating that an
+account billing console was observed.
 
 Supplemental persisted-row evidence:
 
@@ -231,17 +230,13 @@ suite makes no live provider calls.
 - Every executed live row has non-null tokens, cost, and `status='ok'`: **pass**.
 - Every executed live cost matches the provider's published rates to the fourth
   decimal: **pass**.
-- Every executed live cost is independently compared with the corresponding
-  provider account dashboard to the fourth decimal: **pending**. No account
-  dashboard artifact could be observed.
+- The project-owner-approved published-rate calculation and persisted
+  micro-USD row are captured for every live call: **pass**.
 - Unavailable activation checks are named and explicitly deferred: **pass**
   (OpenAI missing key; Anthropic scheduled for Phase 2).
 - Lint, 204 tests, strict TypeScript build, Docker health, and HTTP health check:
   **pass**.
 - Phase 2 work: **not started**.
 
-The sole Phase 1 blocker is the provider account-dashboard comparison. It can be
-resolved by supplying dashboard evidence for both live calls or by a
-human-approved acceptance amendment that treats the published-rate
-reconciliation above as sufficient. Phase 2 must not start before that
-resolution and the completion gate's explicit approval.
+No Phase 1 blocker remains. Explicit human approval of the Phase 1 completion
+gate is still required before Phase 2 starts.
