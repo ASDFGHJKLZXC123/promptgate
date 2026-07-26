@@ -474,6 +474,7 @@ describe("readStreamChunk — first-token and usage tee", () => {
 	test("a nonempty content delta is the first token", () => {
 		expect(readStreamChunk(JSON.stringify(CONTENT_CHUNK))).toEqual({
 			contentDelta: "Hello",
+			visibleContentChars: 5,
 			usage: null,
 		});
 	});
@@ -507,12 +508,13 @@ describe("readStreamChunk — first-token and usage tee", () => {
 					finish_reason: null,
 				},
 				{ index: 1, delta: { content: "later" }, finish_reason: null },
+				{ index: 2, delta: { content: "also" }, finish_reason: null },
 			],
 			usage: null,
 		};
-		expect(readStreamChunk(JSON.stringify(multiChoice)).contentDelta).toBe(
-			"later",
-		);
+		const reading = readStreamChunk(JSON.stringify(multiChoice));
+		expect(reading.contentDelta).toBe("later");
+		expect(reading.visibleContentChars).toBe(9);
 	});
 
 	test("captures the terminal usage", () => {
@@ -524,10 +526,12 @@ describe("readStreamChunk — first-token and usage tee", () => {
 	test("[DONE] and malformed payloads read as no content and no usage", () => {
 		expect(readStreamChunk("[DONE]")).toEqual({
 			contentDelta: null,
+			visibleContentChars: 0,
 			usage: null,
 		});
 		expect(readStreamChunk("{broken")).toEqual({
 			contentDelta: null,
+			visibleContentChars: 0,
 			usage: null,
 		});
 	});

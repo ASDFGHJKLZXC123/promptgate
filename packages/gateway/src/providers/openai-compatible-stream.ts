@@ -252,6 +252,8 @@ export async function* streamOpenAiCompatible(
 export interface StreamChunkReading {
 	/** The nonempty visible `delta.content`, or null (role/empty/reasoning). */
 	contentDelta: string | null;
+	/** Total visible `delta.content` characters across every choice. */
+	visibleContentChars: number;
 	/** The terminal usage, when this chunk carries it; otherwise null. */
 	usage: ChatUsage | null;
 }
@@ -272,20 +274,23 @@ export function readStreamChunk(payload: string): StreamChunkReading {
 	try {
 		json = JSON.parse(payload);
 	} catch {
-		return { contentDelta: null, usage: null };
+		return { contentDelta: null, visibleContentChars: 0, usage: null };
 	}
 	const result = ChatCompletionChunkSchema.safeParse(json);
 	if (!result.success) {
-		return { contentDelta: null, usage: null };
+		return { contentDelta: null, visibleContentChars: 0, usage: null };
 	}
 	const chunk = result.data;
 	let contentDelta: string | null = null;
+	let visibleContentChars = 0;
 	for (const choice of chunk.choices) {
 		const content = choice.delta.content;
 		if (typeof content === "string" && content.length > 0) {
-			contentDelta = content;
-			break;
+			visibleContentChars += content.length;
+			if (contentDelta === null) {
+				contentDelta = content;
+			}
 		}
 	}
-	return { contentDelta, usage: chunk.usage ?? null };
+	return { contentDelta, visibleContentChars, usage: chunk.usage ?? null };
 }

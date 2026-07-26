@@ -30,7 +30,7 @@ import type {
 	ProviderName,
 	SseChunk,
 } from "../providers/types.js";
-import { meterStreamUsage, meterUsage } from "./meter.js";
+import { meterAbortedStream, meterStreamUsage, meterUsage } from "./meter.js";
 import {
 	insertRequestLog,
 	type RequestLogProvider,
@@ -63,6 +63,7 @@ interface PendingRequestLog {
 	status: RequestLogStatus;
 	errorCode?: string | null;
 	startedAtMs: number;
+	loggingStarted: boolean;
 }
 
 declare module "fastify" {
@@ -105,6 +106,7 @@ function initializeRequestLog(
 		costEstimated: false,
 		status: "rejected_validation",
 		startedAtMs: now(),
+		loggingStarted: false,
 	};
 	reply.header("x-pg-request-id", requestId);
 	reply.header("x-pg-cache", "miss");
@@ -128,9 +130,12 @@ async function logRequest(
 	now: Clock,
 ): Promise<void> {
 	const log = request.pgRequestLog;
-	if (!log) {
+	if (!log || log.loggingStarted) {
 		return;
 	}
+	// A disconnected socket does not reliably run Fastify's onResponse hook.
+	// Mark before insertion so an onResponse race cannot duplicate the row.
+	log.loggingStarted = true;
 
 	let totalMs = elapsedMs(log.startedAtMs, now);
 	if (log.firstTokenMs != null && totalMs <= log.firstTokenMs) {
@@ -240,6 +245,23 @@ function sendStreamStartError(
 	return sendProviderError(reply, log, provider, error);
 }
 
+function applyStreamMeter(
+	db: Database.Database,
+	log: PendingRequestLog,
+	body: ChatRequest,
+	usage: ChatUsage | undefined,
+	emittedVisibleChars: number,
+): void {
+	const meter =
+		usage === undefined
+			? meterAbortedStream(db, body.model, body, emittedVisibleChars)
+			: meterStreamUsage(db, body.model, usage);
+	log.inputTokens = meter.inputTokens;
+	log.outputTokens = meter.outputTokens;
+	log.costMicroUsd = meter.costMicroUsd;
+	log.costEstimated = meter.costEstimated;
+}
+
 /**
  * Yields framed SSE bytes to the client for a streamed exchange
  * (IMPLEMENTATION_GUIDE.md §3.3), forwarding each already-validated chunk
@@ -247,8 +269,8 @@ function sendStreamStartError(
  * backpressure). Tee-reads each chunk just enough to timestamp the first
  * content delta (`first_token_ms`) and capture the terminal usage, then meters
  * once the stream completes so the route-level `onResponse` hook can persist
- * the row. A contract violation or abort after headers ends the stream without
- * `[DONE]` and marks the request `provider_error`, never leaking the payload.
+ * the row. A contract violation ends the stream without `[DONE]` as a
+ * `provider_error`; a client abort is recorded separately without leaking data.
  */
 async function* streamFrames(
 	db: Database.Database,
@@ -260,21 +282,50 @@ async function* streamFrames(
 	firstResult: IteratorResult<SseChunk>,
 	timeout: ReturnType<typeof setTimeout>,
 	now: Clock,
+	wasClientAborted: () => boolean,
+	cleanup: () => void,
 ): AsyncGenerator<Buffer> {
 	let firstTokenMs: number | undefined;
 	let usage: ChatUsage | undefined;
+	let emittedVisibleChars = 0;
+	let iteratorCompleted = false;
+	let iteratorClosed = false;
+	const closeIterator = async (): Promise<void> => {
+		if (iteratorCompleted || iteratorClosed || !iterator.return) {
+			return;
+		}
+		iteratorClosed = true;
+		try {
+			await iterator.return();
+		} catch (error) {
+			const failureType = error instanceof Error ? error.name : "UnknownError";
+			request.log.warn(
+				{ provider, requestId: log.requestId, failureType },
+				"Failed to close upstream stream after an early exit",
+			);
+		}
+	};
 	try {
 		let result = firstResult;
 		while (result.done !== true) {
+			// `iterator.next()` can settle concurrently with a socket reset. Never
+			// parse, count, or forward a frame that arrived after the reset.
+			if (wasClientAborted()) {
+				break;
+			}
 			const chunk = result.value;
 			if (!chunk.done) {
 				const reading = readStreamChunk(chunk.data);
 				if (firstTokenMs === undefined && reading.contentDelta !== null) {
 					firstTokenMs = elapsedMs(log.startedAtMs, now);
 				}
+				emittedVisibleChars += reading.visibleContentChars;
 				if (reading.usage !== null) {
 					usage = reading.usage;
 				}
+			}
+			if (wasClientAborted()) {
+				break;
 			}
 			// Reframe each logical payload as one-`data:`-line-per-newline so a
 			// standards-compliant client reconstructs the exact payload even when
@@ -283,8 +334,15 @@ async function* streamFrames(
 			yield Buffer.from(frameSseData(chunk.data), "utf8");
 			result = await iterator.next();
 		}
+		iteratorCompleted = result.done === true;
 
 		log.firstTokenMs = firstTokenMs ?? null;
+		if (wasClientAborted()) {
+			applyStreamMeter(db, log, body, usage, emittedVisibleChars);
+			log.status = "client_aborted";
+			log.errorCode = null;
+			return;
+		}
 		if (usage === undefined) {
 			// Unreachable: the adapter fails closed on a missing terminal usage
 			// chunk before [DONE]. Guarded so a future adapter can't log "ok"
@@ -293,16 +351,18 @@ async function* streamFrames(
 			log.errorCode = "provider_error";
 			return;
 		}
-		const meter = meterStreamUsage(db, body.model, usage);
-		log.inputTokens = meter.inputTokens;
-		log.outputTokens = meter.outputTokens;
-		log.costMicroUsd = meter.costMicroUsd;
-		log.costEstimated = meter.costEstimated;
+		applyStreamMeter(db, log, body, usage, emittedVisibleChars);
 		log.status = "ok";
 	} catch (error) {
 		log.firstTokenMs = firstTokenMs ?? null;
-		log.status = "provider_error";
-		log.errorCode = "provider_error";
+		if (wasClientAborted()) {
+			applyStreamMeter(db, log, body, usage, emittedVisibleChars);
+			log.status = "client_aborted";
+			log.errorCode = null;
+		} else {
+			log.status = "provider_error";
+			log.errorCode = "provider_error";
+		}
 		const failureType = error instanceof Error ? error.name : "UnknownError";
 		request.log.error(
 			{ provider, requestId: log.requestId, failureType },
@@ -310,6 +370,14 @@ async function* streamFrames(
 		);
 	} finally {
 		clearTimeout(timeout);
+		cleanup();
+		await closeIterator();
+		if (wasClientAborted()) {
+			// Fastify does not guarantee onResponse after a client has reset the
+			// response socket. Preserve the audit row without blocking the closed
+			// connection; normal paths remain onResponse-only.
+			void logRequest(db, request, now);
+		}
 	}
 }
 
@@ -332,24 +400,88 @@ async function handleStreamingRequest(
 	now: Clock,
 ): Promise<FastifyReply> {
 	const controller = new AbortController();
+	let clientAborted = false;
+	const abortForClientDisconnect = (): void => {
+		if (!clientAborted && !controller.signal.aborted) {
+			clientAborted = true;
+			controller.abort(new Error("Client disconnected"));
+		}
+	};
+	// Fastify's documented signal is the request raw stream closing with an
+	// aborted request. A response-side close catches the usual POST case where
+	// the request body was fully received before the streaming response dies.
+	const onRequestClose = (): void => {
+		if (request.raw.aborted) {
+			abortForClientDisconnect();
+		}
+	};
+	const onResponseClose = (): void => {
+		if (!reply.raw.writableEnded) {
+			abortForClientDisconnect();
+		}
+	};
+	const cleanup = (): void => {
+		request.raw.off("close", onRequestClose);
+		reply.raw.off("close", onResponseClose);
+	};
+	request.raw.on("close", onRequestClose);
+	reply.raw.on("close", onResponseClose);
 	const timeout = setTimeout(() => {
-		controller.abort(new Error("Upstream request timed out"));
+		if (!controller.signal.aborted) {
+			controller.abort(new Error("Upstream request timed out"));
+		}
 	}, config.UPSTREAM_TIMEOUT_MS);
+	log.streamed = true;
 
-	let iterator: AsyncIterator<SseChunk>;
+	let iterator: AsyncIterator<SseChunk> | undefined;
 	let firstResult: IteratorResult<SseChunk>;
 	try {
 		iterator = adapter.stream(body, controller.signal)[Symbol.asyncIterator]();
 		firstResult = await iterator.next();
 	} catch (error) {
 		clearTimeout(timeout);
+		cleanup();
+		try {
+			await iterator?.return?.();
+		} catch (returnError) {
+			const failureType =
+				returnError instanceof Error ? returnError.name : "UnknownError";
+			request.log.warn(
+				{ provider, requestId: log.requestId, failureType },
+				"Failed to close upstream stream after a pre-header failure",
+			);
+		}
+		if (clientAborted) {
+			applyStreamMeter(db, log, body, undefined, 0);
+			log.status = "client_aborted";
+			log.errorCode = null;
+			void logRequest(db, request, now);
+			return reply;
+		}
 		return sendStreamStartError(reply, log, provider, error, controller.signal);
+	}
+	if (clientAborted) {
+		clearTimeout(timeout);
+		cleanup();
+		try {
+			await iterator.return?.();
+		} catch (error) {
+			const failureType = error instanceof Error ? error.name : "UnknownError";
+			request.log.warn(
+				{ provider, requestId: log.requestId, failureType },
+				"Failed to close upstream stream after a pre-header client abort",
+			);
+		}
+		applyStreamMeter(db, log, body, undefined, 0);
+		log.status = "client_aborted";
+		log.errorCode = null;
+		void logRequest(db, request, now);
+		return reply;
 	}
 
 	// The fetch succeeded and the first frame is in hand: committed to a
 	// streamed 200 whose headers can no longer change. x-pg-cost-usd is
 	// deliberately omitted — a live stream's usage doesn't exist yet (§5.1).
-	log.streamed = true;
 	reply.header("content-type", "text/event-stream");
 	reply.header("cache-control", "no-cache");
 
@@ -365,6 +497,8 @@ async function handleStreamingRequest(
 				firstResult,
 				timeout,
 				now,
+				() => clientAborted,
+				cleanup,
 			),
 		),
 	);

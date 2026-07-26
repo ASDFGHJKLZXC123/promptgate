@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { request as httpRequest } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ChatRequest, ChatResponse } from "@promptgate/shared";
@@ -135,6 +136,17 @@ function contentFrame(text: string): SseChunk {
 	return frame({
 		...CHUNK_BASE,
 		choices: [{ index: 0, delta: { content: text }, finish_reason: null }],
+		usage: null,
+	});
+}
+function multiChoiceContentFrame(texts: string[]): SseChunk {
+	return frame({
+		...CHUNK_BASE,
+		choices: texts.map((text, index) => ({
+			index,
+			delta: { content: text },
+			finish_reason: null,
+		})),
 		usage: null,
 	});
 }
@@ -730,6 +742,245 @@ describe("POST /v1/chat/completions — streaming forwards before upstream close
 			expect(row.streamed).toBe(1);
 			expect(row.status).toBe("ok");
 			expect(row.first_token_ms as number).toBeLessThan(row.total_ms as number);
+		} finally {
+			await server.close();
+			db.close();
+		}
+	});
+
+	test("aborts the upstream and estimates every visible choice when a real client destroys its streaming socket", async () => {
+		const db = openTestDb();
+		seedApiKey(db);
+		seedPricing(db, "gpt-stream", 1_000_000, 2_000_000);
+		let observedAbort: Promise<void> | undefined;
+		const adapter: ProviderAdapter = {
+			name: "openai",
+			async complete(): Promise<ChatResponse> {
+				throw new Error("unused");
+			},
+			async *stream(
+				_req: ChatRequest,
+				signal: AbortSignal,
+			): AsyncIterable<SseChunk> {
+				yield roleFrame();
+				yield multiChoiceContentFrame(["A", "BCDEFGH"]);
+				observedAbort = new Promise((resolve) => {
+					signal.addEventListener("abort", () => resolve(), { once: true });
+				});
+				await observedAbort;
+				throw signal.reason;
+			},
+		};
+		const server = await buildTestServer({ openai: adapter });
+		const address = await server.listen({ port: 0, host: "127.0.0.1" });
+
+		try {
+			const outcome = await new Promise<{ requestId: string }>(
+				(resolve, reject) => {
+					const client = httpRequest(
+						`${address}/v1/chat/completions`,
+						{
+							method: "POST",
+							headers: {
+								...authHeaders(),
+								"content-length": Buffer.byteLength(streamBody("gpt-stream")),
+							},
+						},
+						(response) => {
+							const requestId = response.headers["x-pg-request-id"];
+							if (typeof requestId !== "string") {
+								reject(new Error("missing request id"));
+								return;
+							}
+							response.on("data", () => {
+								client.destroy();
+								resolve({ requestId });
+							});
+						},
+					);
+					client.on("error", (error: Error) => {
+						if (error.message !== "socket hang up") {
+							reject(error);
+						}
+					});
+					client.end(streamBody("gpt-stream"));
+				},
+			);
+
+			await observedAbort;
+			const row = await readRow(db, outcome.requestId);
+			expect(row.status).toBe("client_aborted");
+			expect(row.error_code).toBeNull();
+			expect(row.cost_estimated).toBe(1);
+			// "say hi" -> 2 input tokens; both emitted choices total eight chars.
+			// Counting only the first choice would incorrectly report one output token.
+			expect(row.input_tokens).toBe(2);
+			expect(row.output_tokens).toBe(2);
+			expect(row.cost_micro_usd).toBe(6);
+			expect(row.first_token_ms).not.toBeNull();
+		} finally {
+			await server.close();
+			db.close();
+		}
+	});
+
+	test("does not count a frame settled after a client reset and closes the upstream iterator once", async () => {
+		const db = openTestDb();
+		seedApiKey(db);
+		seedPricing(db, "gpt-stream", 1_000_000, 2_000_000);
+		let returnCalls = 0;
+		let observedAbort: Promise<void> | undefined;
+		const adapter: ProviderAdapter = {
+			name: "openai",
+			async complete(): Promise<ChatResponse> {
+				throw new Error("unused");
+			},
+			stream(_req: ChatRequest, signal: AbortSignal): AsyncIterable<SseChunk> {
+				return {
+					[Symbol.asyncIterator](): AsyncIterator<SseChunk> {
+						let nextCalls = 0;
+						return {
+							async next(): Promise<IteratorResult<SseChunk>> {
+								nextCalls += 1;
+								if (nextCalls === 1) {
+									return { value: roleFrame(), done: false };
+								}
+								observedAbort = new Promise((resolve) => {
+									signal.addEventListener("abort", () => resolve(), {
+										once: true,
+									});
+								});
+								await observedAbort;
+								return { value: contentFrame("NEVER"), done: false };
+							},
+							async return(): Promise<IteratorResult<SseChunk>> {
+								returnCalls += 1;
+								return { value: undefined, done: true };
+							},
+						};
+					},
+				};
+			},
+		};
+		const server = await buildTestServer({ openai: adapter });
+		const address = await server.listen({ port: 0, host: "127.0.0.1" });
+
+		try {
+			const outcome = await new Promise<{ requestId: string }>(
+				(resolve, reject) => {
+					const client = httpRequest(
+						`${address}/v1/chat/completions`,
+						{
+							method: "POST",
+							headers: {
+								...authHeaders(),
+								"content-length": Buffer.byteLength(streamBody("gpt-stream")),
+							},
+						},
+						(response) => {
+							const requestId = response.headers["x-pg-request-id"];
+							if (typeof requestId !== "string") {
+								reject(new Error("missing request id"));
+								return;
+							}
+							response.once("data", () => {
+								client.destroy();
+								resolve({ requestId });
+							});
+						},
+					);
+					client.on("error", (error: Error) => {
+						if (error.message !== "socket hang up") {
+							reject(error);
+						}
+					});
+					client.end(streamBody("gpt-stream"));
+				},
+			);
+
+			await observedAbort;
+			const row = await readRow(db, outcome.requestId);
+			expect(row.status).toBe("client_aborted");
+			expect(row.output_tokens).toBe(0);
+			expect(row.cost_estimated).toBe(1);
+			expect(returnCalls).toBe(1);
+		} finally {
+			await server.close();
+			db.close();
+		}
+	});
+
+	test("keeps terminal usage exact when the client disconnects after it arrives", async () => {
+		const db = openTestDb();
+		seedApiKey(db);
+		seedPricing(db, "gpt-stream", 1_000_000, 2_000_000);
+		let observedAbort: Promise<void> | undefined;
+		const adapter: ProviderAdapter = {
+			name: "openai",
+			async complete(): Promise<ChatResponse> {
+				throw new Error("unused");
+			},
+			async *stream(
+				_req: ChatRequest,
+				signal: AbortSignal,
+			): AsyncIterable<SseChunk> {
+				yield roleFrame();
+				yield contentFrame("Hello");
+				yield usageFrame({
+					prompt_tokens: 10,
+					completion_tokens: 5,
+					total_tokens: 15,
+				});
+				observedAbort = new Promise((resolve) => {
+					signal.addEventListener("abort", () => resolve(), { once: true });
+				});
+				await observedAbort;
+				throw signal.reason;
+			},
+		};
+		const server = await buildTestServer({ openai: adapter });
+		const address = await server.listen({ port: 0, host: "127.0.0.1" });
+
+		try {
+			const outcome = await new Promise<{ requestId: string }>(
+				(resolve, reject) => {
+					const client = httpRequest(
+						`${address}/v1/chat/completions`,
+						{
+							method: "POST",
+							headers: {
+								...authHeaders(),
+								"content-length": Buffer.byteLength(streamBody("gpt-stream")),
+							},
+						},
+						(response) => {
+							const requestId = response.headers["x-pg-request-id"];
+							if (typeof requestId !== "string") {
+								reject(new Error("missing request id"));
+								return;
+							}
+							response.once("data", () => {
+								client.destroy();
+								resolve({ requestId });
+							});
+						},
+					);
+					client.on("error", (error: Error) => {
+						if (error.message !== "socket hang up") {
+							reject(error);
+						}
+					});
+					client.end(streamBody("gpt-stream"));
+				},
+			);
+
+			await observedAbort;
+			const row = await readRow(db, outcome.requestId);
+			expect(row.status).toBe("client_aborted");
+			expect(row.cost_estimated).toBe(0);
+			expect(row.input_tokens).toBe(10);
+			expect(row.output_tokens).toBe(5);
+			expect(row.cost_micro_usd).toBe(20);
 		} finally {
 			await server.close();
 			db.close();

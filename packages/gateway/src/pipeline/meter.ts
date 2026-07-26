@@ -179,3 +179,24 @@ export function meterStreamUsage(
 ): MeterResult {
 	return meterExactUsage(usage, requirePricing(db, model));
 }
+
+/**
+ * Meters a stream the client disconnected from before a terminal provider
+ * usage report arrived.  The only output we can responsibly estimate is text
+ * that has actually been emitted to the client; hidden reasoning and tool
+ * arguments deliberately do not get invented here.
+ */
+export function meterAbortedStream(
+	db: Database.Database,
+	model: string,
+	req: ChatRequest,
+	emittedVisibleChars: number,
+): MeterResult {
+	const pricing = requirePricing(db, model);
+	const inputTokens = estimatePromptTokens(req);
+	const outputTokens = estimateTokensFromChars(emittedVisibleChars);
+	const costMicroUsd =
+		priceInputTokens(undefined, inputTokens, pricing) +
+		Math.round((outputTokens * pricing.output_micro_usd_per_mtok) / 1_000_000);
+	return { inputTokens, outputTokens, costMicroUsd, costEstimated: true };
+}
