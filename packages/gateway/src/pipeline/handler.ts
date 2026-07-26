@@ -22,7 +22,6 @@ import {
 	ProviderConfigError,
 	ProviderError,
 	ProviderRequestError,
-	StreamNotImplementedError,
 } from "../providers/provider-error.js";
 import { resolveProvider } from "../providers/routes.js";
 import { frameSseData } from "../providers/sse-parse.js";
@@ -212,8 +211,7 @@ function sendProviderError(
 /**
  * Maps an error thrown while establishing the stream — before any response
  * headers are sent — to a safe OpenAI JSON envelope (BUILD_PLAYBOOK.md phase 2
- * step 3). A provider config/HTTP error keeps its existing mapping; an
- * unimplemented streaming provider (Anthropic until step 4) is a clean 501; a
+ * step 3). A provider config/HTTP error keeps its existing mapping; a
  * request-translation error is a 400. None echo an upstream body.
  */
 function sendStreamStartError(
@@ -230,17 +228,6 @@ function sendStreamStartError(
 			reply,
 			504,
 			`Upstream ${provider} request timed out.`,
-			"provider_error",
-			"server_error",
-		);
-	}
-	if (error instanceof StreamNotImplementedError) {
-		log.status = "rejected_stream_unsupported";
-		log.errorCode = "provider_error";
-		return sendError(
-			reply,
-			501,
-			`Streaming is not implemented for the ${provider} provider yet.`,
 			"provider_error",
 			"server_error",
 		);

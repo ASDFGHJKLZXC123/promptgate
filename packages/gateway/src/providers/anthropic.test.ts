@@ -285,10 +285,42 @@ test("propagates abort without retrying", async () => {
 	expect(fetch).toHaveBeenCalledTimes(1);
 });
 
-test("stream() throws synchronously as not-yet-supported until Phase 2 step 4", () => {
-	const adapter = createAnthropicAdapter({ apiKey: "sk-ant-test-key" });
+test("stream() delegates to the Anthropic SSE translator and ends with [DONE]", async () => {
+	// Delegation smoke test only; the full streaming contract lives in
+	// anthropic-stream.test.ts. Proves the adapter wires stream() to the
+	// translator instead of throwing the old not-implemented stub.
+	const fixture = readFileSync(
+		path.join(FIXTURES_DIR, "anthropic-streaming.txt"),
+		"utf8",
+	);
+	const body = new ReadableStream<Uint8Array>({
+		start(controller) {
+			controller.enqueue(new TextEncoder().encode(fixture));
+			controller.close();
+		},
+	});
+	const fetch = vi.fn().mockResolvedValue(
+		new Response(body, {
+			status: 200,
+			headers: { "content-type": "text/event-stream" },
+		}),
+	);
+	const adapter = createAnthropicAdapter({
+		apiKey: "sk-ant-test-key",
+		retryDeps: noRetryDeps(fetch),
+	});
 
-	expect(() =>
-		adapter.stream(FAKE_REQUEST, new AbortController().signal),
-	).toThrow(/Phase 2/);
+	const chunks: { data: string; done: boolean }[] = [];
+	for await (const chunk of adapter.stream(
+		FAKE_REQUEST,
+		new AbortController().signal,
+	)) {
+		chunks.push(chunk);
+	}
+
+	expect(chunks.at(-1)).toEqual({ data: "[DONE]", done: true });
+	const [url, init] = fetch.mock.calls[0] as [string, RequestInit];
+	expect(url).toBe("https://api.anthropic.com/v1/messages");
+	expect(init.headers).toMatchObject({ accept: "text/event-stream" });
+	expect(JSON.parse(init.body as string).stream).toBe(true);
 });

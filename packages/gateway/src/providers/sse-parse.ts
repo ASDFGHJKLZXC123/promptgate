@@ -92,6 +92,129 @@ function takeLines(
 	return { lines, rest: buffer.slice(lineStart) };
 }
 
+/**
+ * One dispatched SSE event: its `event:` field name (or null when the stream
+ * omitted it, per the WHATWG "message" default being represented as absence)
+ * and the concatenated `data` payload. Anthropic's Messages stream names every
+ * event (`message_start`, `content_block_delta`, …), so the translator
+ * (`anthropic-stream.ts`) both consumes the name and cross-checks it against
+ * the payload's own `type` field before trusting either.
+ */
+export interface SseEvent {
+	event: string | null;
+	data: string;
+}
+
+export interface ParseSseEventsOptions {
+	/**
+	 * If set, a complete (line-terminated) pending event at EOF whose `event:`
+	 * name is exactly this string is dispatched instead of discarded. This is the
+	 * Anthropic analogue of `parseSseData`'s `[DONE]` exception: the official
+	 * Messages transcript ends its final `message_stop` event with a single
+	 * newline and no trailing blank line, so a strict WHATWG parser would drop
+	 * it. Matching on the *event name* (not the data payload) keeps this narrow to
+	 * a complete terminal event and deliberately does NOT widen the separate
+	 * data-payload `[DONE]` exception. Omit it for strict WHATWG discard.
+	 */
+	pendingEventSentinel?: string;
+}
+
+/**
+ * Event-name-aware sibling of `parseSseData` (BUILD_PLAYBOOK.md phase 2 step 4).
+ * Anthropic's native stream is not a sequence of anonymous `data:` payloads —
+ * each frame carries an `event:` name that must agree with the payload's `type`
+ * — so this yields the `{event, data}` pair for the same framing rules (mixed
+ * `\n`/`\r`/`\r\n` terminators, byte-split UTF-8/CRLF, comments/`id`/`retry`
+ * ignored, multi-line `data:` joined with `\n`). `parseSseData` is left exactly
+ * as-is so every step-3 consumer and test is untouched.
+ */
+export async function* parseSseEvents(
+	body: ReadableStream<Uint8Array>,
+	options: ParseSseEventsOptions = {},
+): AsyncGenerator<SseEvent> {
+	const reader = body.getReader();
+	const decoder = new TextDecoder();
+	let buffer = "";
+	const dataLines: string[] = [];
+	let sawData = false;
+	let eventName: string | null = null;
+
+	/** Applies one complete line; returns a dispatched event, or null. */
+	function processLine(line: string): SseEvent | null {
+		if (line === "") {
+			if (!sawData) {
+				// WHATWG: a blank line with no data buffer dispatches nothing and
+				// resets the event-type buffer.
+				eventName = null;
+				return null;
+			}
+			const event: SseEvent = { event: eventName, data: dataLines.join("\n") };
+			dataLines.length = 0;
+			sawData = false;
+			eventName = null;
+			return event;
+		}
+		if (line.startsWith(":")) {
+			return null; // comment line
+		}
+		const colon = line.indexOf(":");
+		const field = colon === -1 ? line : line.slice(0, colon);
+		let value = colon === -1 ? "" : line.slice(colon + 1);
+		if (value.startsWith(" ")) {
+			value = value.slice(1);
+		}
+		if (field === "data") {
+			dataLines.push(value);
+			sawData = true;
+		} else if (field === "event") {
+			eventName = value;
+		}
+		// Other fields (id/retry) are ignored, exactly as in parseSseData.
+		return null;
+	}
+
+	try {
+		while (true) {
+			const { done, value } = await reader.read();
+			if (done) {
+				break;
+			}
+			buffer += decoder.decode(value, { stream: true });
+			const { lines, rest } = takeLines(buffer, false);
+			buffer = rest;
+			for (const line of lines) {
+				const event = processLine(line);
+				if (event !== null) {
+					yield event;
+				}
+			}
+		}
+
+		buffer += decoder.decode();
+		const { lines, rest } = takeLines(buffer, true);
+		for (const line of lines) {
+			const event = processLine(line);
+			if (event !== null) {
+				yield event;
+			}
+		}
+		if (rest.length > 0) {
+			throw new SseTruncationError("SSE stream ended in the middle of a line.");
+		}
+		// A complete but non-blank-line-terminated pending event: WHATWG discards
+		// it. The single opt-in exception is an exact `pendingEventSentinel` name.
+		if (
+			sawData &&
+			options.pendingEventSentinel !== undefined &&
+			eventName === options.pendingEventSentinel
+		) {
+			yield { event: eventName, data: dataLines.join("\n") };
+		}
+	} finally {
+		await reader.cancel().catch(() => {});
+	}
+}
+
 export async function* parseSseData(
 	body: ReadableStream<Uint8Array>,
 	options: ParseSseOptions = {},

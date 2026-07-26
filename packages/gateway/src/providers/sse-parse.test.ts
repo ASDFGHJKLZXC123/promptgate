@@ -2,8 +2,11 @@ import { describe, expect, test } from "vitest";
 
 import {
 	frameSseData,
+	type ParseSseEventsOptions,
 	type ParseSseOptions,
 	parseSseData,
+	parseSseEvents,
+	type SseEvent,
 	SseTruncationError,
 } from "./sse-parse.js";
 
@@ -158,6 +161,101 @@ describe("parseSseData", () => {
 				collect(streamFromChunks([encode("data: [DONE]")]), DONE),
 			).rejects.toBeInstanceOf(SseTruncationError);
 		});
+	});
+});
+
+/** Collect event/data pairs with the Anthropic `message_stop` EOF sentinel. */
+const MESSAGE_STOP: ParseSseEventsOptions = {
+	pendingEventSentinel: "message_stop",
+};
+
+async function collectEvents(
+	body: ReadableStream<Uint8Array>,
+	options: ParseSseEventsOptions = MESSAGE_STOP,
+): Promise<SseEvent[]> {
+	const events: SseEvent[] = [];
+	for await (const event of parseSseEvents(body, options)) {
+		events.push(event);
+	}
+	return events;
+}
+
+const ANTHROPIC_TRANSCRIPT =
+	'event: message_start\ndata: {"type":"message_start"}\n\n' +
+	'event: content_block_delta\ndata: {"type":"content_block_delta"}\n\n' +
+	'event: message_stop\ndata: {"type":"message_stop"}\n';
+
+describe("parseSseEvents", () => {
+	test("yields event name + data, dispatching the single-newline terminal message_stop", async () => {
+		expect(
+			await collectEvents(streamFromChunks([encode(ANTHROPIC_TRANSCRIPT)])),
+		).toEqual([
+			{ event: "message_start", data: '{"type":"message_start"}' },
+			{ event: "content_block_delta", data: '{"type":"content_block_delta"}' },
+			{ event: "message_stop", data: '{"type":"message_stop"}' },
+		]);
+	});
+
+	test("is invariant to one-byte-at-a-time chunk boundaries", async () => {
+		expect(
+			await collectEvents(
+				streamFromChunks(singleByteChunks(ANTHROPIC_TRANSCRIPT)),
+			),
+		).toEqual([
+			{ event: "message_start", data: '{"type":"message_start"}' },
+			{ event: "content_block_delta", data: '{"type":"content_block_delta"}' },
+			{ event: "message_stop", data: '{"type":"message_stop"}' },
+		]);
+	});
+
+	test("carries a null event name when no event field is present", async () => {
+		expect(
+			await collectEvents(streamFromChunks([encode('data: {"a":1}\n\n')]), {}),
+		).toEqual([{ event: null, data: '{"a":1}' }]);
+	});
+
+	test("ignores comments and id/retry fields but keeps the last event name", async () => {
+		const transcript =
+			': keep-alive\nevent: ignored\nevent: ping\nid: 7\ndata: {"type":"ping"}\nretry: 100\n\n';
+		expect(
+			await collectEvents(streamFromChunks([encode(transcript)]), {}),
+		).toEqual([{ event: "ping", data: '{"type":"ping"}' }]);
+	});
+
+	test("discards a complete pending non-message_stop event at EOF (narrow exception)", async () => {
+		const transcript =
+			'event: message_start\ndata: {"type":"message_start"}\n\nevent: message_delta\ndata: {"type":"message_delta"}\n';
+		expect(await collectEvents(streamFromChunks([encode(transcript)]))).toEqual(
+			[{ event: "message_start", data: '{"type":"message_start"}' }],
+		);
+	});
+
+	test("discards a pending message_stop when the sentinel is not configured", async () => {
+		expect(
+			await collectEvents(
+				streamFromChunks([
+					encode('event: message_stop\ndata: {"type":"message_stop"}\n'),
+				]),
+				{},
+			),
+		).toEqual([]);
+	});
+
+	test("treats an unterminated final line as truncation, not a dispatch", async () => {
+		await expect(
+			collectEvents(
+				streamFromChunks([
+					encode('event: message_stop\ndata: {"type":"message'),
+				]),
+			),
+		).rejects.toBeInstanceOf(SseTruncationError);
+	});
+
+	test("dispatches nothing extra when message_stop already ended in a blank line", async () => {
+		const transcript = 'event: message_stop\ndata: {"type":"message_stop"}\n\n';
+		expect(await collectEvents(streamFromChunks([encode(transcript)]))).toEqual(
+			[{ event: "message_stop", data: '{"type":"message_stop"}' }],
+		);
 	});
 });
 

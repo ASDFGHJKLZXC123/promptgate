@@ -1,14 +1,11 @@
 import type { ChatRequest, ChatResponse } from "@promptgate/shared";
 
+import { streamAnthropic } from "./anthropic-stream.js";
 import {
 	fromAnthropicResponse,
 	toAnthropicRequest,
 } from "./anthropic-translate.js";
-import {
-	ProviderConfigError,
-	ProviderError,
-	StreamNotImplementedError,
-} from "./provider-error.js";
+import { ProviderConfigError, ProviderError } from "./provider-error.js";
 import {
 	defaultRetryDeps,
 	fetchWithRetry,
@@ -63,7 +60,9 @@ async function readErrorBody(response: Response): Promise<unknown> {
  * OpenAI shape (`anthropic-translate.ts`). A missing key is a safe
  * `ProviderConfigError` before any request; an untranslatable request shape is
  * a typed `ProviderRequestError` (HTTP 400) instead of malformed upstream
- * data. Streaming stays a stub until phase 2 step 4.
+ * data. Streaming (phase 2 step 4) reuses the same request translation plus
+ * `stream: true` and delegates the native-event → OpenAI-chunk translation to
+ * `anthropic-stream.ts`.
  */
 export function createAnthropicAdapter(
 	options: AnthropicAdapterOptions,
@@ -118,13 +117,15 @@ export function createAnthropicAdapter(
 			);
 		},
 
-		stream(_req: ChatRequest, _signal: AbortSignal): AsyncIterable<SseChunk> {
-			// Anthropic SSE translation lands in phase 2 step 4; until then a
-			// streaming request must fail cleanly, never crash the pipeline. The
-			// typed error maps to a safe 501 (BUILD_PLAYBOOK.md phase 2 step 3).
-			throw new StreamNotImplementedError(
-				"anthropic",
-				"Anthropic streaming is not implemented until Phase 2 step 4 (BUILD_PLAYBOOK.md).",
+		stream(req: ChatRequest, signal: AbortSignal): AsyncIterable<SseChunk> {
+			// Reuse the exact step-2 request translation plus Anthropic's stream flag
+			// (BUILD_PLAYBOOK.md phase 2 step 4). The key is required only here, at
+			// invocation, and every SSE-contract failure fails closed as a typed
+			// error inside the returned generator.
+			return streamAnthropic(
+				{ apiKey: options.apiKey, defaultMaxTokens, retryDeps, now },
+				req,
+				signal,
 			);
 		},
 	};

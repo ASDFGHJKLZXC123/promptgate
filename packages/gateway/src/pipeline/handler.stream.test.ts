@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ChatRequest, ChatResponse } from "@promptgate/shared";
@@ -223,6 +223,30 @@ async function serverWithRealOpenAi(
 		now,
 	});
 }
+
+/** Builds a server wired to the REAL Anthropic adapter over a fake fetch. */
+async function serverWithRealAnthropic(
+	fetch: RetryFetchDeps["fetch"],
+	now?: () => number,
+): Promise<FastifyInstance> {
+	const { createAnthropicAdapter } = await import("../providers/anthropic.js");
+	const { buildServer } = await import("../server.js");
+	return buildServer({
+		adapters: {
+			anthropic: createAnthropicAdapter({
+				apiKey: "sk-ant-test",
+				defaultMaxTokens: 512,
+				retryDeps: noRetryDeps(fetch),
+			}),
+		},
+		now,
+	});
+}
+
+const ANTHROPIC_STREAM_FIXTURE = readFileSync(
+	join(import.meta.dirname, "../../test/fixtures/anthropic-streaming.txt"),
+	"utf8",
+);
 
 /** Reparses the SSE bytes a client received, reconstructing each logical payload. */
 async function parseClientSse(payload: string): Promise<string[]> {
@@ -500,23 +524,17 @@ describe("POST /v1/chat/completions — streaming success", () => {
 			db.close();
 		}
 	});
-});
 
-describe("POST /v1/chat/completions — streaming error paths", () => {
-	test("a configured Anthropic streaming request is a safe 501, never a crash", async () => {
+	test("translates a configured Anthropic stream end-to-end with metering, [DONE], and no cost header", async () => {
 		const db = openTestDb();
 		seedApiKey(db);
 		seedPricing(db, "claude-stream", 1_000_000, 2_000_000, {
 			provider: "anthropic",
 		});
-		// Import through the same (post-resetModules) graph as the server so the
-		// StreamNotImplementedError identity matches the handler's check.
-		const { createAnthropicAdapter } = await import(
-			"../providers/anthropic.js"
-		);
-		const server = await buildTestServer({
-			anthropic: createAnthropicAdapter({ apiKey: "sk-ant-test-key" }),
-		});
+		const fetch = vi
+			.fn()
+			.mockResolvedValue(sseResponse(ANTHROPIC_STREAM_FIXTURE));
+		const server = await serverWithRealAnthropic(fetch);
 
 		try {
 			const response = await server.inject({
@@ -526,21 +544,43 @@ describe("POST /v1/chat/completions — streaming error paths", () => {
 				body: streamBody("claude-stream"),
 			});
 
-			expect(response.statusCode).toBe(501);
-			expect((response.json() as OpenAIErrorResponse).error.code).toBe(
-				"provider_error",
+			expect(response.statusCode).toBe(200);
+			expect(response.headers["content-type"]).toContain("text/event-stream");
+			expect(response.headers["x-pg-cache"]).toBe("miss");
+			expect(response.headers["x-pg-request-id"]).toMatch(UUID_RE);
+			// A live stream never carries the cost header (§5.1).
+			expect(response.headers["x-pg-cost-usd"]).toBeUndefined();
+			expect(response.payload).toContain(
+				"Hello from the PromptGate contract fixture.",
 			);
+			expect(response.payload.trimEnd().endsWith("data: [DONE]")).toBe(true);
+
+			// The outbound request reused the step-2 translation plus stream:true.
+			const [, init] = fetch.mock.calls[0] as [string, RequestInit];
+			expect(JSON.parse(init.body as string).stream).toBe(true);
+
 			const row = await readRow(
 				db,
 				response.headers["x-pg-request-id"] as string,
 			);
-			expect(row.status).toBe("rejected_stream_unsupported");
+			expect(row.streamed).toBe(1);
+			expect(row.provider).toBe("anthropic");
+			expect(row.status).toBe("ok");
+			expect(row.input_tokens).toBe(19);
+			expect(row.output_tokens).toBe(12);
+			// round(19*1e6/1e6) + round(12*2e6/1e6) = 19 + 24 = 43
+			expect(row.cost_micro_usd).toBe(43);
+			expect(row.cost_estimated).toBe(0);
+			expect(row.first_token_ms).not.toBeNull();
+			expect(row.first_token_ms as number).toBeLessThan(row.total_ms as number);
 		} finally {
 			await server.close();
 			db.close();
 		}
 	});
+});
 
+describe("POST /v1/chat/completions — streaming error paths", () => {
 	test("a missing provider key at stream start maps to a 503 JSON envelope (headers not yet sent)", async () => {
 		const db = openTestDb();
 		seedApiKey(db);

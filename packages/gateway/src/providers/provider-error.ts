@@ -81,19 +81,3 @@ export class StreamContractError extends Error {
 		this.provider = provider;
 	}
 }
-
-/**
- * Thrown by an adapter whose streaming path is not implemented yet — currently
- * only Anthropic, whose SSE translation lands in phase 2 step 4. The pipeline
- * maps this to a safe 501 `provider_error` so a configured Anthropic streaming
- * request fails cleanly instead of crashing (BUILD_PLAYBOOK.md phase 2 step 3).
- */
-export class StreamNotImplementedError extends Error {
-	readonly provider: ProviderName;
-
-	constructor(provider: ProviderName, message: string) {
-		super(message);
-		this.name = "StreamNotImplementedError";
-		this.provider = provider;
-	}
-}
