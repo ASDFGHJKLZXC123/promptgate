@@ -28,11 +28,12 @@ function seedPricingWithCachedInput(
 	inputRate: number,
 	cachedInputRate: number,
 	outputRate: number,
+	provider: "deepseek" | "gemini" = "deepseek",
 ): void {
 	db.prepare(
 		`INSERT INTO model_pricing (provider, model, input_micro_usd_per_mtok, cached_input_micro_usd_per_mtok, output_micro_usd_per_mtok, effective_from)
-		 VALUES ('deepseek', ?, ?, ?, ?, '2020-01-01')`,
-	).run(model, inputRate, cachedInputRate, outputRate);
+		 VALUES (?, ?, ?, ?, ?, '2020-01-01')`,
+	).run(provider, model, inputRate, cachedInputRate, outputRate);
 }
 
 beforeEach(() => {
@@ -165,6 +166,41 @@ test("rounds cache-hit, cache-miss, and output charges as separate billing compo
 	// output: round(0.28) = 0. Combining input classes first would yield 1,
 	// so this locks the approved per-component rounding rule.
 	expect(result.costMicroUsd).toBe(0);
+});
+
+test("derives Gemini cache misses from prompt_tokens_details and meters the three components exactly", () => {
+	seedPricingWithCachedInput(
+		"gemini-2.5-flash",
+		300_000,
+		30_000,
+		2_500_000,
+		"gemini",
+	);
+
+	const result = meterUsage(
+		db,
+		"gemini-2.5-flash",
+		REQUEST,
+		response({
+			model: "gemini-2.5-flash",
+			usage: {
+				prompt_tokens: 1_000,
+				completion_tokens: 10,
+				total_tokens: 1_010,
+				prompt_tokens_details: { cached_tokens: 400 },
+			},
+		}),
+	);
+
+	// round(400 * 30_000 / 1e6) = 12
+	// round(600 * 300_000 / 1e6) = 180
+	// round(10 * 2_500_000 / 1e6) = 25
+	expect(result).toEqual({
+		inputTokens: 1_000,
+		outputTokens: 10,
+		costMicroUsd: 12 + 180 + 25,
+		costEstimated: false,
+	});
 });
 
 test("falls back to ordinary input pricing when the model has no cached rate, even if usage reports a cache split", () => {

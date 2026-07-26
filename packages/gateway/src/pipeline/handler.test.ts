@@ -789,20 +789,27 @@ describe("POST /v1/chat/completions — logging lifecycle", () => {
 });
 
 describe("POST /v1/chat/completions — Gemini and DeepSeek routing (BUILD_PLAYBOOK.md phase 1 step 12)", () => {
-	test("routes a gemini- model to the injected Gemini fake adapter and meters exact cost/log", async () => {
+	test("routes Gemini 2.5 Flash to the injected adapter and meters exact cached-input cost/log", async () => {
 		const db = openTestDb();
 		seedApiKey(db);
-		// $1.50/Mtok in, $2.50/Mtok out — same rounding-forcing rates as the
-		// OpenAI exact-cost test above (round(1.5)=2, round(2.5)=3, total 5).
-		seedPricing(db, "gemini-test-exact", 1_500_000, 2_500_000, {
+		// Official standard text rates: $0.30/Mtok ordinary input,
+		// $0.03/Mtok cached input, $2.50/Mtok output. With 400 cached,
+		// 600 uncached, and 10 output tokens: 12 + 180 + 25 = 217 micro-USD.
+		seedPricing(db, "gemini-2.5-flash", 300_000, 2_500_000, {
 			provider: "gemini",
+			cachedInputRate: 30_000,
 		});
 
 		const { adapter, calls } = fakeAdapter(
 			async () =>
 				fakeChatResponse({
-					model: "gemini-test-exact",
-					usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+					model: "gemini-2.5-flash",
+					usage: {
+						prompt_tokens: 1_000,
+						completion_tokens: 10,
+						total_tokens: 1_010,
+						prompt_tokens_details: { cached_tokens: 400 },
+					},
 				}),
 			"gemini",
 		);
@@ -814,14 +821,14 @@ describe("POST /v1/chat/completions — Gemini and DeepSeek routing (BUILD_PLAYB
 				url: "/v1/chat/completions",
 				headers: authHeaders(),
 				body: JSON.stringify({
-					model: "gemini-test-exact",
+					model: "gemini-2.5-flash",
 					messages: [{ role: "user", content: "say hi" }],
 				}),
 			});
 
 			expect(response.statusCode).toBe(200);
 			expect(calls).toHaveLength(1);
-			expect(response.headers["x-pg-cost-usd"]).toBe("0.000005");
+			expect(response.headers["x-pg-cost-usd"]).toBe("0.000217");
 
 			await new Promise((resolve) => setTimeout(resolve, 20));
 			const requestId = response.headers["x-pg-request-id"] as string;
@@ -830,10 +837,10 @@ describe("POST /v1/chat/completions — Gemini and DeepSeek routing (BUILD_PLAYB
 				.get(requestId) as RequestsRow;
 
 			expect(row.provider).toBe("gemini");
-			expect(row.model).toBe("gemini-test-exact");
-			expect(row.input_tokens).toBe(1);
-			expect(row.output_tokens).toBe(1);
-			expect(row.cost_micro_usd).toBe(5);
+			expect(row.model).toBe("gemini-2.5-flash");
+			expect(row.input_tokens).toBe(1_000);
+			expect(row.output_tokens).toBe(10);
+			expect(row.cost_micro_usd).toBe(217);
 			expect(row.cost_estimated).toBe(0);
 			expect(row.status).toBe("ok");
 		} finally {
@@ -866,6 +873,7 @@ describe("POST /v1/chat/completions — Gemini and DeepSeek routing (BUILD_PLAYB
 						total_tokens: 3_500,
 						prompt_cache_hit_tokens: 1_000,
 						prompt_cache_miss_tokens: 2_000,
+						prompt_tokens_details: { cached_tokens: 1_000 },
 					},
 				}),
 			"deepseek",

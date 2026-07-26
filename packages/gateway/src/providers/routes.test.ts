@@ -85,11 +85,11 @@ describe("resolveProvider — prefix routing (IMPLEMENTATION_GUIDE.md §3.1)", (
 	test("routes a priced gemini- model to gemini", () => {
 		seedPricing({
 			provider: "gemini",
-			model: "gemini-2.5-flash-lite",
+			model: "gemini-2.5-flash",
 			effective_from: "2026-01-01",
 		});
 
-		const result = resolveProvider(db, "gemini-2.5-flash-lite");
+		const result = resolveProvider(db, "gemini-2.5-flash");
 
 		expect(result).toEqual({ ok: true, provider: "gemini" });
 	});

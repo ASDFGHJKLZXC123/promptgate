@@ -177,6 +177,102 @@ describe("ChatResponseSchema", () => {
 		expect(result.success).toBe(false);
 	});
 
+	test("accepts Gemini cached-token details within prompt_tokens", () => {
+		const result = ChatResponseSchema.safeParse({
+			id: "chatcmpl-1",
+			object: "chat.completion",
+			created: 1_700_000_000,
+			model: "gemini-2.5-flash",
+			choices: [
+				{
+					index: 0,
+					message: { role: "assistant", content: "hi there" },
+					finish_reason: "stop",
+				},
+			],
+			usage: {
+				prompt_tokens: 10,
+				completion_tokens: 5,
+				total_tokens: 15,
+				prompt_tokens_details: { cached_tokens: 4 },
+			},
+		});
+		expect(result.success).toBe(true);
+	});
+
+	test("rejects Gemini cached-token details that exceed prompt_tokens", () => {
+		const result = ChatResponseSchema.safeParse({
+			id: "chatcmpl-1",
+			object: "chat.completion",
+			created: 1_700_000_000,
+			model: "gemini-2.5-flash",
+			choices: [
+				{
+					index: 0,
+					message: { role: "assistant", content: "hi there" },
+					finish_reason: "stop",
+				},
+			],
+			usage: {
+				prompt_tokens: 10,
+				completion_tokens: 5,
+				total_tokens: 15,
+				prompt_tokens_details: { cached_tokens: 11 },
+			},
+		});
+		expect(result.success).toBe(false);
+	});
+
+	test("accepts matching DeepSeek cache fields in both compatible representations", () => {
+		const result = ChatResponseSchema.safeParse({
+			id: "chatcmpl-1",
+			object: "chat.completion",
+			created: 1_700_000_000,
+			model: "deepseek-v4-flash",
+			choices: [
+				{
+					index: 0,
+					message: { role: "assistant", content: "hi there" },
+					finish_reason: "stop",
+				},
+			],
+			usage: {
+				prompt_tokens: 10,
+				completion_tokens: 5,
+				total_tokens: 15,
+				prompt_cache_hit_tokens: 4,
+				prompt_cache_miss_tokens: 6,
+				prompt_tokens_details: { cached_tokens: 4 },
+			},
+		});
+		expect(result.success).toBe(true);
+	});
+
+	test("rejects conflicting cache-hit counts across compatible representations", () => {
+		const result = ChatResponseSchema.safeParse({
+			id: "chatcmpl-1",
+			object: "chat.completion",
+			created: 1_700_000_000,
+			model: "deepseek-v4-flash",
+			choices: [
+				{
+					index: 0,
+					message: { role: "assistant", content: "hi there" },
+					finish_reason: "stop",
+				},
+			],
+			usage: {
+				prompt_tokens: 10,
+				completion_tokens: 5,
+				total_tokens: 15,
+				prompt_cache_hit_tokens: 4,
+				prompt_cache_miss_tokens: 6,
+				prompt_tokens_details: { cached_tokens: 3 },
+			},
+		});
+		expect(result.success).toBe(false);
+	});
+
 	test("rejects an invalid finish_reason value", () => {
 		const result = ChatResponseSchema.safeParse({
 			id: "chatcmpl-1",

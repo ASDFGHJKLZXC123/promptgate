@@ -122,6 +122,7 @@ test("validates and returns a successful response with paired cache usage", asyn
 			total_tokens: 120,
 			prompt_cache_hit_tokens: 60,
 			prompt_cache_miss_tokens: 40,
+			prompt_tokens_details: { cached_tokens: 60 },
 		},
 	};
 	const fetch = vi
@@ -140,6 +141,7 @@ test("validates and returns a successful response with paired cache usage", asyn
 	expect(result).toEqual(responseWithCacheUsage);
 	expect(result.usage?.prompt_cache_hit_tokens).toBe(60);
 	expect(result.usage?.prompt_cache_miss_tokens).toBe(40);
+	expect(result.usage?.prompt_tokens_details?.cached_tokens).toBe(60);
 });
 
 test("accepts DeepSeek's documented insufficient_system_resource finish reason", async () => {
@@ -196,6 +198,31 @@ test("throws when the cache usage pair is malformed (mismatched sum)", async () 
 	const fetch = vi
 		.fn()
 		.mockResolvedValue(jsonResponse(200, responseWithBadCacheUsage));
+	const adapter = createDeepSeekAdapter({
+		apiKey: "sk-deepseek-test-key",
+		retryDeps: noRetryDeps(fetch),
+	});
+
+	await expect(
+		adapter.complete(FAKE_REQUEST, new AbortController().signal),
+	).rejects.toThrow();
+});
+
+test("throws when DeepSeek's two cache-hit representations disagree", async () => {
+	const responseWithConflictingCacheUsage = {
+		...FAKE_RESPONSE_BODY,
+		usage: {
+			prompt_tokens: 100,
+			completion_tokens: 20,
+			total_tokens: 120,
+			prompt_cache_hit_tokens: 60,
+			prompt_cache_miss_tokens: 40,
+			prompt_tokens_details: { cached_tokens: 59 },
+		},
+	};
+	const fetch = vi
+		.fn()
+		.mockResolvedValue(jsonResponse(200, responseWithConflictingCacheUsage));
 	const adapter = createDeepSeekAdapter({
 		apiKey: "sk-deepseek-test-key",
 		retryDeps: noRetryDeps(fetch),

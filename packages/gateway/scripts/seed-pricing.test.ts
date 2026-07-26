@@ -72,6 +72,14 @@ const HUMAN_APPROVED_ROWS = [
 		effective_from: "2026-07-25",
 	},
 	{
+		provider: "gemini",
+		model: "gemini-2.5-flash",
+		input_micro_usd_per_mtok: 300000,
+		cached_input_micro_usd_per_mtok: 30000,
+		output_micro_usd_per_mtok: 2500000,
+		effective_from: "2026-07-25",
+	},
+	{
 		provider: "deepseek",
 		model: "deepseek-v4-flash",
 		input_micro_usd_per_mtok: 140000,
@@ -243,8 +251,8 @@ describe("seed-pricing", () => {
 		const secondRows = readSeededRows(context.dbPath);
 		const secondSet = rowsAsSet(secondRows);
 
-		expect(firstRows).toHaveLength(6);
-		expect(secondRows).toHaveLength(6);
+		expect(firstRows).toHaveLength(7);
+		expect(secondRows).toHaveLength(7);
 		expect(secondSet).toEqual(firstSet);
 	});
 

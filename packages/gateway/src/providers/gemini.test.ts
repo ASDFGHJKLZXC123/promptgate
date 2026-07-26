@@ -6,7 +6,7 @@ import { ProviderConfigError, ProviderError } from "./provider-error.js";
 import type { RetryFetchDeps } from "./retry.js";
 
 const FAKE_REQUEST: ChatRequest = {
-	model: "gemini-2.5-flash-lite",
+	model: "gemini-2.5-flash",
 	messages: [{ role: "user", content: "say hi" }],
 };
 
@@ -14,7 +14,7 @@ const FAKE_RESPONSE_BODY = {
 	id: "chatcmpl-test",
 	object: "chat.completion",
 	created: 0,
-	model: "gemini-2.5-flash-lite",
+	model: "gemini-2.5-flash",
 	choices: [
 		{
 			index: 0,
@@ -22,7 +22,12 @@ const FAKE_RESPONSE_BODY = {
 			finish_reason: "stop",
 		},
 	],
-	usage: { prompt_tokens: 3, completion_tokens: 1, total_tokens: 4 },
+	usage: {
+		prompt_tokens: 3,
+		completion_tokens: 1,
+		total_tokens: 4,
+		prompt_tokens_details: { cached_tokens: 1 },
+	},
 };
 
 function jsonResponse(status: number, body: unknown): Response {
@@ -67,7 +72,7 @@ test("sends the exact endpoint, method, and headers", async () => {
 	});
 	const sentBody = JSON.parse(init.body as string);
 	expect(sentBody).toEqual({
-		model: "gemini-2.5-flash-lite",
+		model: "gemini-2.5-flash",
 		messages: [{ role: "user", content: "say hi" }],
 	});
 });
@@ -93,7 +98,7 @@ test("strips pg_* fields from the forwarded body", async () => {
 	const [, init] = fetch.mock.calls[0] as [string, RequestInit];
 	const sentBody = JSON.parse(init.body as string);
 	expect(sentBody).toEqual({
-		model: "gemini-2.5-flash-lite",
+		model: "gemini-2.5-flash",
 		messages: [{ role: "user", content: "say hi" }],
 	});
 });
@@ -145,6 +150,7 @@ test("validates and returns a successful response with usage", async () => {
 	expect(result).toEqual(FAKE_RESPONSE_BODY);
 	expect(result.usage?.prompt_tokens).toBe(3);
 	expect(result.usage?.completion_tokens).toBe(1);
+	expect(result.usage?.prompt_tokens_details?.cached_tokens).toBe(1);
 });
 
 test("throws when the successful response fails ChatResponseSchema validation", async () => {

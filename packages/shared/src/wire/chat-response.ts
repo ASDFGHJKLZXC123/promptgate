@@ -4,16 +4,15 @@ import { ChatMessageSchema } from "./message.js";
 
 /**
  * Normalized token usage returned by the approved providers (§3.5 — the
- * source of truth for metering). Extra breakdown fields
- * (prompt_tokens_details, ...) pass
- * through unvalidated.
+ * source of truth for metering). Extra breakdown fields pass through, but
+ * the cache-token fields PromptGate prices are validated explicitly.
  *
  * `prompt_cache_hit_tokens`/`prompt_cache_miss_tokens` (BUILD_PLAYBOOK.md
  * phase 1 step 9, human-approved four-provider scope amendment 2026-07-25)
- * are an optional pair reported by providers that split cached vs. uncached
- * input pricing (e.g. DeepSeek): both present or both absent, and when
- * present they must sum to `prompt_tokens` — `meterUsage` trusts that
- * invariant rather than re-deriving it.
+ * are an optional pair reported by DeepSeek. Gemini reports the equivalent
+ * cache hit count as `prompt_tokens_details.cached_tokens`; its uncached
+ * count is derived from `prompt_tokens`. When both representations appear,
+ * as current DeepSeek responses may do, their cache-hit counts must agree.
  */
 export const ChatUsageSchema = z
 	.looseObject({
@@ -22,6 +21,12 @@ export const ChatUsageSchema = z
 		total_tokens: z.number().int().nonnegative(),
 		prompt_cache_hit_tokens: z.number().int().nonnegative().optional(),
 		prompt_cache_miss_tokens: z.number().int().nonnegative().optional(),
+		prompt_tokens_details: z
+			.looseObject({
+				cached_tokens: z.number().int().nonnegative().optional(),
+			})
+			.nullable()
+			.optional(),
 	})
 	.refine(
 		(usage) =>
@@ -41,6 +46,26 @@ export const ChatUsageSchema = z
 		{
 			message:
 				"prompt_cache_hit_tokens + prompt_cache_miss_tokens must equal prompt_tokens.",
+		},
+	)
+	.refine(
+		(usage) =>
+			usage.prompt_tokens_details?.cached_tokens === undefined ||
+			usage.prompt_tokens_details.cached_tokens <= usage.prompt_tokens,
+		{
+			message:
+				"prompt_tokens_details.cached_tokens must not exceed prompt_tokens.",
+		},
+	)
+	.refine(
+		(usage) =>
+			usage.prompt_tokens_details?.cached_tokens === undefined ||
+			usage.prompt_cache_hit_tokens === undefined ||
+			usage.prompt_tokens_details.cached_tokens ===
+				usage.prompt_cache_hit_tokens,
+		{
+			message:
+				"prompt_tokens_details.cached_tokens must equal prompt_cache_hit_tokens when both are present.",
 		},
 	);
 export type ChatUsage = z.infer<typeof ChatUsageSchema>;

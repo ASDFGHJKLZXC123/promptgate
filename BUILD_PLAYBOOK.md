@@ -147,6 +147,8 @@ Build order matters here: types → pricing → keys → auth → adapter → ro
 
 12. **Four-provider integration.** Add `^deepseek-` and `^gemini-` routes, wire both adapters into the server's `ProviderAdapterRegistry`, and reject `unknown_model` when the model's current pricing row names a provider different from the prefix-selected provider. Keep `/v1/models` as the deterministic list of currently priced models regardless of key availability; an unavailable key fails only when that model is called. Add `openai` to the root dev dependencies so the literal SDK verify has a repository-pinned client rather than relying on a global install. Add offline pipeline coverage for both new routes, provider/pricing mismatch, adapter selection, exact metering/logging, and no-network model listing.
 
+**Human-approved pre-verify correction (2026-07-25; not a new numbered step).** Keep `gemini-2.5-flash-lite` supported and add `gemini-2.5-flash` as the Gemini verification/eval target at the official standard text/image/video rates: input 300000, cached input 30000, output 2500000 micro-USD per Mtok, effective 2026-07-25. Extend `ChatUsageSchema` to validate `usage.prompt_tokens_details.cached_tokens <= prompt_tokens`; when DeepSeek supplies both that compatible field and its explicit hit/miss pair, the cache-hit counts must agree. Extend `meterUsage` to derive Gemini cache misses as `prompt_tokens - cached_tokens` and apply the same independently rounded cached-input/ordinary-input/output formula. The approved Phase 1 activation check is text-only; audio and nonstandard service tiers have different prices and remain outside this row.
+
 **Verify phase 1 (amended 2026-07-25 for steps 9–12):** run the OpenAI-compatible client below for each configured phase-1 provider. Gemini and DeepSeek are the intended live targets for the current build; run OpenAI too if its key is configured. Anthropic remains explicitly deferred until its phase-2 adapter exists. A missing key is an explicit deferred activation check, not a false pass; record the live/deferred matrix and reason in `PROGRESS.md`:
 ```bash
 set -a
@@ -173,7 +175,7 @@ verify_model() {
     console.log(process.env.MODEL, r.choices[0].message.content, r.usage);
   '
 }
-verify_model GEMINI_API_KEY gemini-2.5-flash-lite
+verify_model GEMINI_API_KEY gemini-2.5-flash
 verify_model DEEPSEEK_API_KEY deepseek-v4-flash
 verify_model OPENAI_API_KEY gpt-5.6-luna
 echo "DEFERRED claude-sonnet-5: Anthropic adapter is Phase 2"

@@ -397,6 +397,11 @@ describe("GET /v1/models — distinctness, exclusion, and ordering", () => {
 			effective_from: "2020-01-01",
 		});
 		seedPricing(db, {
+			provider: "gemini",
+			model: "gemini-2.5-flash",
+			effective_from: "2020-01-01",
+		});
+		seedPricing(db, {
 			provider: "deepseek",
 			model: "deepseek-v4-flash",
 			effective_from: "2020-01-01",
@@ -415,9 +420,16 @@ describe("GET /v1/models — distinctness, exclusion, and ordering", () => {
 		expect(body.data.map((model) => model.id)).toEqual([
 			"claude-sonnet-5",
 			"deepseek-v4-flash",
+			"gemini-2.5-flash",
 			"gemini-2.5-flash-lite",
 			"gpt-5.6-luna",
 		]);
+		expect(body.data.find((model) => model.id === "gemini-2.5-flash")).toEqual({
+			id: "gemini-2.5-flash",
+			object: "model",
+			created: unixSecondsOf("2020-01-01"),
+			owned_by: "gemini",
+		});
 		expect(
 			body.data.find((model) => model.id === "gemini-2.5-flash-lite"),
 		).toEqual({

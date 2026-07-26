@@ -429,7 +429,7 @@ test("default adapter wiring selects Gemini and DeepSeek adapters, calling only 
 				href ===
 				"https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
 			) {
-				return fakeUpstreamResponse("gemini-2.5-flash-lite");
+				return fakeUpstreamResponse("gemini-2.5-flash");
 			}
 			if (href === "https://api.deepseek.com/v1/chat/completions") {
 				return fakeUpstreamResponse("deepseek-v4-flash");
@@ -444,8 +444,8 @@ test("default adapter wiring selects Gemini and DeepSeek adapters, calling only 
 
 	try {
 		db.prepare(
-			`INSERT INTO model_pricing (provider, model, input_micro_usd_per_mtok, output_micro_usd_per_mtok, effective_from)
-			 VALUES ('gemini', 'gemini-2.5-flash-lite', 100000, 400000, '2020-01-01')`,
+			`INSERT INTO model_pricing (provider, model, input_micro_usd_per_mtok, cached_input_micro_usd_per_mtok, output_micro_usd_per_mtok, effective_from)
+			 VALUES ('gemini', 'gemini-2.5-flash', 300000, 30000, 2500000, '2020-01-01')`,
 		).run();
 		db.prepare(
 			`INSERT INTO model_pricing (provider, model, input_micro_usd_per_mtok, output_micro_usd_per_mtok, effective_from)
@@ -469,7 +469,7 @@ test("default adapter wiring selects Gemini and DeepSeek adapters, calling only 
 			url: "/v1/chat/completions",
 			headers: clientHeaders,
 			body: JSON.stringify({
-				model: "gemini-2.5-flash-lite",
+				model: "gemini-2.5-flash",
 				messages: [{ role: "user", content: "hi" }],
 			}),
 		});

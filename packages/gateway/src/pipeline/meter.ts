@@ -49,21 +49,26 @@ function estimateCompletionTokens(response: ChatResponse): number {
 /**
  * Prices the input side of a request (IMPLEMENTATION_GUIDE.md §3.5, extended
  * by BUILD_PLAYBOOK.md phase 1 step 9's cache-split metering, 2026-07-25):
- * when the provider reported both paired cache usage fields AND the model's
- * pricing row has a cached-input rate, price the cache-hit and cache-miss
- * components separately (each rounded before summing, same as the output
- * formula below); otherwise price all of `inputTokens` at the ordinary
- * input rate. `ChatUsageSchema` already guarantees the paired fields sum to
- * `prompt_tokens` when both are present, so this never has to reconcile a
- * mismatch.
+ * when the provider reported a validated cache split AND the model's pricing
+ * row has a cached-input rate, price the cache-hit and cache-miss components
+ * separately (each rounded before summing, same as the output formula below).
+ * DeepSeek reports the explicit hit/miss pair; Gemini reports
+ * `prompt_tokens_details.cached_tokens`, from which the miss count is derived.
+ * Otherwise all `inputTokens` use the ordinary input rate.
  */
 function priceInputTokens(
 	usage: ChatResponse["usage"],
 	inputTokens: number,
 	pricing: NonNullable<ReturnType<typeof findCurrentPricing>>,
 ): number {
-	const cacheHitTokens = usage?.prompt_cache_hit_tokens;
-	const cacheMissTokens = usage?.prompt_cache_miss_tokens;
+	const detailedCacheHitTokens = usage?.prompt_tokens_details?.cached_tokens;
+	const cacheHitTokens =
+		usage?.prompt_cache_hit_tokens ?? detailedCacheHitTokens;
+	const cacheMissTokens =
+		usage?.prompt_cache_miss_tokens ??
+		(detailedCacheHitTokens === undefined
+			? undefined
+			: inputTokens - detailedCacheHitTokens);
 	if (
 		cacheHitTokens !== undefined &&
 		cacheMissTokens !== undefined &&

@@ -102,7 +102,7 @@ The prefix-selected provider must equal the provider on the current date-effecti
 - Streaming: translate Anthropic SSE events into OpenAI `chat.completion.chunk` frames. Usage arrives split: `input_tokens` on `message_start`, `output_tokens` on `message_delta` — combine both for the final usage chunk (decision #3's metering path).
 - **Tool calls: out of scope for v1.** Return a 400 (`tools not supported for anthropic-routed models yet`) rather than a broken translation. `TODO(verify)`: check whether web_builder_llm actually sends `tools`; if yes, tool translation moves from stretch into Phase 2, because dogfooding (deliverable 5) depends on it.
 - OpenAI-routed models: pure passthrough (headers scrubbed, auth swapped) — no body rewriting.
-- Gemini-routed models use Google's official OpenAI-compatible endpoint, `https://generativelanguage.googleapis.com/v1beta/openai/chat/completions`, with Bearer `GEMINI_API_KEY`. Preserve the documented `extra_body.google` extension envelope. Keep a provider-specific wrapper even when a narrow compatible core is shared; Gemini additionally retries transient HTTP 408 with the same bounded jittered schedule as 429/5xx.
+- Gemini-routed models use Google's official OpenAI-compatible endpoint, `https://generativelanguage.googleapis.com/v1beta/openai/chat/completions`, with Bearer `GEMINI_API_KEY`. Preserve the documented `extra_body.google` extension envelope. Keep a provider-specific wrapper even when a narrow compatible core is shared; Gemini additionally retries transient HTTP 408 with the same bounded jittered schedule as 429/5xx. Its validated usage accepts `prompt_tokens_details.cached_tokens`; metering derives uncached input as `prompt_tokens - cached_tokens`.
 - DeepSeek-routed models use `https://api.deepseek.com/v1/chat/completions` with Bearer `DEEPSEEK_API_KEY`. Preserve caller-supplied compatibility fields, including `thinking`; do not silently enable/disable reasoning. Its normalized usage retains `prompt_cache_hit_tokens` and `prompt_cache_miss_tokens` for cache-aware pricing, and the shared response boundary accepts DeepSeek's documented `insufficient_system_resource` finish reason.
 - All four API keys are optional at boot and required only when their adapter is invoked. A missing key becomes a safe `provider_error`, never a startup failure or secret-bearing response.
 
@@ -126,7 +126,7 @@ Build-time sources verified 2026-07-25: [Gemini OpenAI compatibility](https://ai
 ### 3.5 Metering & cost (deliverable 1's core)
 
 - Source of truth for tokens: each provider's normalized `usage` object, including final streaming usage when the provider reports it (decision #3).
-- All money is integer micro-USD (§1). Ordinary cost = `round(input_tokens × input_rate / 1e6) + round(output_tokens × output_rate / 1e6)`. When a pricing row has `cached_input_micro_usd_per_mtok` and usage contains the validated cache-hit/cache-miss pair, cost = `round(cache_hit_tokens × cached_input_rate / 1e6) + round(cache_miss_tokens × input_rate / 1e6) + round(output_tokens × output_rate / 1e6)`: the three billing components round independently before summing. If either the split or cached rate is absent, all input uses the ordinary rate. Pricing is **date-effective** (see schema): a price change inserts a new row, historical requests keep their historical cost. `TODO(build-time)`: seed only human-approved current prices from all four providers' official pages.
+- All money is integer micro-USD (§1). Ordinary cost = `round(input_tokens × input_rate / 1e6) + round(output_tokens × output_rate / 1e6)`. When a pricing row has `cached_input_micro_usd_per_mtok` and usage contains validated cache data — either DeepSeek's explicit hit/miss pair or Gemini's `prompt_tokens_details.cached_tokens` with misses derived from total prompt tokens — cost = `round(cache_hit_tokens × cached_input_rate / 1e6) + round(cache_miss_tokens × input_rate / 1e6) + round(output_tokens × output_rate / 1e6)`: the three billing components round independently before summing. If either the split or cached rate is absent, all input uses the ordinary rate. If both compatible cache representations appear, their cache-hit counts must agree. Pricing is **date-effective** (see schema): a price change inserts a new row, historical requests keep their historical cost. `TODO(build-time)`: seed only human-approved current prices from all four providers' official pages.
 - If usage is missing (aborted stream, provider hiccup): estimate via a cheap tokenizer approximation and set `cost_estimated = 1` so dashboards can show estimated vs exact.
 - Rate limiting: token bucket per key, in-memory (single process, so fine); refill from `api_keys.rate_limit_rpm`.
 - **Budget is a hard cap via reserve-then-reconcile** (a post-hoc spend sum alone is only a delayed soft limit — a rapid loop overspends before rows land):
@@ -371,7 +371,7 @@ prompts:
 providers:
   - claude-sonnet-5
   - gpt-5.6-luna
-  - gemini-2.5-flash-lite
+  - gemini-2.5-flash
   - deepseek-v4-flash
 defaultTest:
   threshold: 0.8            # promptfoo puts test-level threshold directly on the test case, NOT under options
