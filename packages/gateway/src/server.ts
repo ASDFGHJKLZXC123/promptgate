@@ -13,6 +13,7 @@ import {
 	registerChatCompletionsRoute,
 } from "./pipeline/handler.js";
 import { registerModelsRoute } from "./pipeline/models.js";
+import { registerRequestUsageRoute } from "./pipeline/usage.js";
 import { createAnthropicAdapter } from "./providers/anthropic.js";
 import { createDeepSeekAdapter } from "./providers/deepseek.js";
 import { createGeminiAdapter } from "./providers/gemini.js";
@@ -76,6 +77,7 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
 			registerClientAuth(v1Server, db);
 			registerChatCompletionsRoute(v1Server, db, adapters, options.now);
 			registerModelsRoute(v1Server, db);
+			registerRequestUsageRoute(v1Server, db);
 		},
 		{ prefix: "/v1" },
 	);

@@ -2,11 +2,12 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type Database from "better-sqlite3";
-import { afterEach, beforeEach, expect, test } from "vitest";
+import { afterEach, beforeEach, describe, expect, test } from "vitest";
 
 import { openDatabase } from "../db/index.js";
 import { migrate } from "../db/migrate.js";
 import {
+	findRequestUsageForKey,
 	type InsertRequestLogInput,
 	insertRequestLog,
 } from "./requests.dao.js";
@@ -230,4 +231,77 @@ test("stores optional fields as NULL when omitted and preserves feature/status/e
 	expect(row.input_tokens).toBeNull();
 	expect(row.output_tokens).toBeNull();
 	expect(row.cost_micro_usd).toBeNull();
+});
+
+describe("findRequestUsageForKey", () => {
+	test("returns only the safe usage projection for the owning key", () => {
+		insertRequestLog(
+			db,
+			baseInput({
+				streamed: true,
+				inputTokens: 12,
+				outputTokens: 7,
+				costMicroUsd: 34,
+				costEstimated: false,
+			}),
+		);
+
+		expect(
+			findRequestUsageForKey(db, {
+				requestId: "11111111-1111-4111-8111-111111111111",
+				apiKeyId,
+			}),
+		).toEqual({
+			request_id: "11111111-1111-4111-8111-111111111111",
+			model: "gpt-test",
+			streamed: true,
+			input_tokens: 12,
+			output_tokens: 7,
+			cost_micro_usd: 34,
+			cost_estimated: false,
+			status: "ok",
+		});
+	});
+
+	test("preserves nullable metering fields and normalizes SQLite booleans", () => {
+		insertRequestLog(
+			db,
+			baseInput({
+				requestId: "22222222-2222-4222-8222-222222222222",
+				streamed: false,
+				costEstimated: true,
+				status: "client_aborted",
+			}),
+		);
+
+		expect(
+			findRequestUsageForKey(db, {
+				requestId: "22222222-2222-4222-8222-222222222222",
+				apiKeyId,
+			}),
+		).toMatchObject({
+			streamed: false,
+			input_tokens: null,
+			output_tokens: null,
+			cost_micro_usd: null,
+			cost_estimated: true,
+			status: "client_aborted",
+		});
+	});
+
+	test("uses the request_id and api_key_id ownership predicate", () => {
+		insertRequestLog(db, baseInput());
+		const otherKey = db
+			.prepare(
+				"INSERT INTO api_keys (name, key_hash) VALUES ('other-key', 'other-hash') RETURNING id",
+			)
+			.get() as { id: number };
+
+		expect(
+			findRequestUsageForKey(db, {
+				requestId: "11111111-1111-4111-8111-111111111111",
+				apiKeyId: otherKey.id,
+			}),
+		).toBeNull();
+	});
 });
