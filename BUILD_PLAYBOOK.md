@@ -185,7 +185,7 @@ Every executed call must return a correct response. Its row must be `status='ok'
 
 ### Phase 2 — Anthropic adapter + four-provider streaming
 
-1. **Record fixtures first.** Capture one real response per configured provider per mode (non-streaming JSON, streaming SSE transcript saved as `.txt`), strip keys, and write it to `packages/gateway/test/fixtures/`. For a provider whose key is unavailable, use a checked-in official-contract fixture marked `live_capture_pending` and replace that marker only after a later bounded activation check. All adapter unit tests run against fixtures — no network in tests, ever (§11).
+1. **Author contract fixtures first — no network (human-approved fixture-timing amendment, 2026-07-25).** Before implementation, create one upstream provider-specific fixture per provider per mode (non-streaming JSON and a raw streaming SSE transcript saved as `.txt`) from each provider's current official contract and write them to `packages/gateway/test/fixtures/`. Mark every fixture `live_capture_pending` regardless of local key availability: `ORCHESTRATOR.md` permits live calls only during the phase Verify window, so step 1 itself must remain offline. All adapter unit tests run against fixtures — no network in tests, ever (§11). During the final Phase 2 Verify window, replace the pending fixtures for configured providers with sanitized bounded live captures and clear only those providers' markers; unavailable providers retain their official-contract fixtures and explicit pending markers.
 
 2. **Anthropic non-streaming.** `src/providers/anthropic.ts` — request translation table (§3.2): extract/concat `system` messages → `system` param; `max_tokens ??= config.DEFAULT_MAX_TOKENS`; **`response_format` → Anthropic structured outputs via `output_config.format`** (confirm the current param name in Anthropic's structured-outputs docs); map response: `content[0].text` → message, `stop_reason` (`end_turn→stop`, `max_tokens→length`) → `finish_reason`, `usage.{input,output}_tokens` → `{prompt,completion}_tokens`. Reject `tools` with 400 (per §3.2) — and **resolve the `TODO(verify)` now**: grep web_builder_llm for `tools:`; if present, build tool translation in this phase.
 
@@ -208,6 +208,8 @@ Every executed call must return a correct response. Its row must be `status='ok'
 sqlite3 data/promptgate.db "SELECT model, streamed, first_token_ms, total_ms, cost_micro_usd FROM requests ORDER BY id DESC LIMIT 4;"
 ```
 Every executed provider row: `streamed=1`, non-null tokens/cost, `first_token_ms < total_ms`. Checkpoint A audits code parity across all four plus the explicit live/deferred matrix.
+
+Fixture activation is part of this Verify window and is the only Phase 2 point at which direct provider capture is allowed: make exactly one bounded non-streaming request and one bounded streaming request to each configured provider, strip credentials and provider-generated identifiers, replace that provider's official-contract fixtures, and clear its `live_capture_pending` markers. Providers without keys remain explicitly pending. If a live capture differs from the authored contract fixture, reconcile the fixture or code, rerun the complete offline suite, commit the correction, rebuild the final code state, and rerun the literal gateway Verify above from the start.
 
 ### Phase 3 — Cache, rate limits, budgets
 

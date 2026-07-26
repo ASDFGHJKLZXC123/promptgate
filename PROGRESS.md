@@ -2,10 +2,10 @@
 
 > Maintained by the orchestrator (see `ORCHESTRATOR.md`). Updated after every step. Humans: the Position line is always the truth.
 
-**Position:** Phase 0 — done and human-approved; Phase 1 — done and human-approved; Phase 2 — not started
-**Last session:** 2026-07-25 — the project owner explicitly approved the Phase 1 completion gate after every acceptance criterion passed
-**Repo state at last update:** Phase 1 is complete and human-approved with evidence captured; Phase 2 has not started
-**Last commit:** phase-1 approve: record the completion gate (this commit) · **Last green `pnpm lint && pnpm test`:** 2026-07-25 (20 test files, 204 tests passed)
+**Position:** Phase 0 — done and human-approved; Phase 1 — done and human-approved; Phase 2 — in progress (step 1)
+**Last session:** 2026-07-25 — completed Phase 2 preflight, resolved the web_builder_llm tools TODO, and received human approval for offline-first fixtures with live capture deferred to the Verify window
+**Repo state at last update:** Phase 2 authority and repository preflight are complete; step 1 is not yet implemented; Phase 3 has not started
+**Last commit:** phase-2 amend: defer live fixture capture to verify (this commit) · **Last green `pnpm lint && pnpm test`:** 2026-07-25 (20 test files, 204 tests passed)
 
 ## Phase status
 
@@ -15,7 +15,7 @@ Model/effort per ORCHESTRATOR.md → Model & effort assignment.
 |---|---|---|---|---|---|
 | 0 | Scaffold | GPT-5.3-Codex-Spark / xhigh; Terra / medium for DB+Docker | done | `docs/evidence/phase-0.md` | project owner — 2026-07-16 |
 | 1 | OpenAI-compatible non-streaming | Claude Sonnet 5 / high; Spark+Luna support; Sol / xhigh expansion audit | done | `docs/evidence/phase-1.md` | project owner — 2026-07-25 |
-| 2 | Anthropic + four-provider streaming | Claude Opus 4.8 / xhigh; Luna fixtures; Sol / xhigh checkpoint | not started | — | — |
+| 2 | Anthropic + four-provider streaming | Claude Opus 4.8 / xhigh; Luna fixtures; Sol / xhigh checkpoint | in progress (step 1) | — | — |
 | 3 | Cache, limits, budgets | GPT-5.6 Terra / high; Sol / xhigh budget audit | not started | — | — |
 | 4 | Prompt registry | GPT-5.6 Terra / high; Spark support | not started | — | — |
 | 5 | Eval harness | Claude Opus 4.8 / xhigh; Spark+Luna support; Fable dataset | not started | — | — |
@@ -46,7 +46,7 @@ Status values: `not started` · `in progress (step K)` · `verify pending` · `a
 
 | Item | Where | Resolution | Date |
 |---|---|---|---|
-| web_builder_llm sends `tools`? | GUIDE §3.2 / playbook phase 2 | unresolved | — |
+| web_builder_llm sends `tools`? | GUIDE §3.2 / playbook phase 2 | resolved — `AnthropicMessagesLlmClient` sends one `tools` entry with `input_schema` and forced `tool_choice` when its effective strategy is `ANTHROPIC_TOOL`; Phase 2 must implement Anthropic tool translation | 2026-07-25 |
 | web_builder_llm calls `GET /v1/models`? | GUIDE §5.1 / playbook phase 8 | unresolved | — |
 | carematch_ai safety cases: file paths + the 6 cases | GUIDE §7.3 / playbook phase 5 | unresolved | — |
 | web_builder_llm provider config surface (env vars) | GUIDE §9 / playbook phase 8 | unresolved | — |
@@ -64,6 +64,7 @@ Small choices the spec didn't cover (architectural ones go to the human instead 
 
 | Date | Decision | Rationale |
 |---|---|---|
+| 2026-07-25 | Applied the project-owner-approved Phase 2 fixture-timing amendment: step 1 authors official-contract fixtures for all four providers entirely offline with `live_capture_pending`; configured-provider live captures replace them only during the final Verify window, while missing-key providers remain pending. | Phase 2 step 1 originally required early live captures, but the higher-authority orchestration safety rail permits live calls only in phase Verify blocks and eval runs. Claude Opus 4.8 / xhigh independently confirmed the conflict and recommended amending the lower-authority playbook without weakening the safety rail. |
 | 2026-07-25 | The project owner approved independently recorded official published-rate reconciliation plus persisted integer micro-USD rows as the Phase 1 cost evidence in place of provider account-dashboard artifacts. The Phase 1 acceptance table and Verify wording now state this exact requirement. | Both live calls expose sufficient usage to reproduce exact component-rounded cost, while the API keys expose no per-request billing-console artifact and browser site-use settings prevent dashboard inspection. The approved evidence remains stricter than a four-decimal display alone because it preserves exact integer micro-USD amounts and calculation inputs. |
 | 2026-07-25 | Normalize billable/logged Gemini output tokens to `usage.total_tokens - usage.prompt_tokens`, while forwarding the provider's original compatible response unchanged; OpenAI and DeepSeek continue using `completion_tokens`. Reject usage where `total_tokens < prompt_tokens + completion_tokens`. | The first current-image live Verify returned Gemini usage `{prompt: 3, completion: 2, total: 28}`: the compatibility response's visible completion omitted 23 hidden thinking tokens that Google bills at the output rate. Provider-specific normalization produces the official candidate-plus-thinking billable count without double-counting DeepSeek/OpenAI reasoning, whose completion totals already reconcile. |
 | 2026-07-25 | Applied the owner's pre-verify model correction by retaining `gemini-2.5-flash-lite` and adding `gemini-2.5-flash` as the Gemini verification/eval target at the approved standard rates: 300000 ordinary input, 30000 cached input, and 2500000 output micro-USD/Mtok. Validated Gemini's compatible `prompt_tokens_details.cached_tokens`, reconciled it with DeepSeek's explicit pair when both appear, and derived uncached input for independent three-component rounding. | Keeping Flash-Lite avoids deleting a valid supported model or consuming a migration solely for cleanup. Official standard pricing differs materially from Flash-Lite, so a new exact row and cache-aware wire/meter path are required. Direct bounded calls returned HTTP 200 for the owner's Gemini and DeepSeek keys with the requested model IDs; the gateway phase verify remains pending. |
@@ -102,6 +103,7 @@ Small choices the spec didn't cover (architectural ones go to the human instead 
 
 | Date | Covered | Ended at |
 |---|---|---|
+| 2026-07-25 | Phase 2 preflight and human-approved fixture-timing amendment — read the complete orchestration manual, current progress, Phase 2 playbook, and GUIDE §§3.1–3.6, 5.1, and 11; confirmed a clean Phase 1-approved repository with 204 tests green; verified Gemini/DeepSeek keys present and OpenAI/Anthropic absent without exposing values; resolved the external tools TODO by inspecting web_builder_llm's native Anthropic client; and retained the higher-authority no-live-calls-before-Verify safety rail. Claude Opus 4.8 / xhigh confirmed the documentation conflict and amendment direction. | Phase 2, step 1 — not started |
 | 2026-07-25 | Phase 1 completion gate — the project owner explicitly approved the completed and verified phase after reviewing commits, changed-file scope, live/deferred provider matrix, exact published-rate reconciliation, lint, 204 tests, strict build, Docker health, resolved deviations, and the final evidence record. | Phase 2 — not started |
 | 2026-07-25 | Human-approved Phase 1 cost-evidence amendment — accepted independently recorded official published-rate reconciliation plus persisted integer micro-USD rows in place of provider account-dashboard artifacts. Updated the Phase 1 acceptance table, literal Verify outcome requirement, completion evidence, decision log, and current position without changing the already-run Verify block or any code. The prior independent audit's only blocker is resolved; all Phase 1 acceptance criteria now pass. | Phase 1 completion gate — awaiting explicit human approval |
 | 2026-07-25 | Phase 1 verification checkpoint — rebuilt the current Docker image, seeded the root mounted database explicitly, and ran the amended Verify block literally. The same pinned OpenAI SDK client returned valid live responses through Gemini 2.5 Flash and DeepSeek V4 Flash; rows persisted as Gemini 3 input/27 billable output/69 micro-USD/ok and DeepSeek 6 input/60 output/18 micro-USD/ok. OpenAI was explicitly deferred because its key is absent, Anthropic was explicitly deferred to Phase 2, Docker remained healthy with HTTP 200, and final lint, 204 tests, strict build, and diff checks passed. An independent gate audit correctly held the separate account-dashboard comparison open; browser access to both dashboards is disabled by the user's site-use settings. Evidence: `docs/evidence/phase-1.md`. | Phase 1 — verify pending on provider dashboard evidence or approved acceptance amendment |
