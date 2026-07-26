@@ -30,7 +30,11 @@ import type {
 	ProviderName,
 	SseChunk,
 } from "../providers/types.js";
-import { type CacheHit, findAndRecordCacheHit } from "./cache.dao.js";
+import {
+	type CacheHit,
+	findAndRecordCacheHit,
+	upsertCacheEntry,
+} from "./cache.dao.js";
 import { cacheKeyOf } from "./cache-key.js";
 import { meterAbortedStream, meterStreamUsage, meterUsage } from "./meter.js";
 import {
@@ -38,6 +42,7 @@ import {
 	type RequestLogProvider,
 	type RequestLogStatus,
 } from "./requests.dao.js";
+import { StreamingResponseAssembler } from "./stream-assembler.js";
 
 /** Adapters actually wired for this process; Anthropic joined in phase 2 step 2 (non-streaming). */
 export type ProviderAdapterRegistry = Partial<
@@ -223,16 +228,24 @@ function sendCacheHit(
 ): FastifyReply {
 	log.cacheHit = true;
 	log.streamed = body.stream === true;
-	const normalizedUsage = meterStreamUsage(db, body.model, hit.usage);
+	const normalizedUsage =
+		hit.usage === null
+			? meterUsage(db, body.model, body, hit.response)
+			: meterStreamUsage(db, body.model, hit.usage);
 	log.inputTokens = normalizedUsage.inputTokens;
 	log.outputTokens = normalizedUsage.outputTokens;
 	log.costMicroUsd = 0;
-	log.costEstimated = false;
+	log.costEstimated = normalizedUsage.costEstimated;
 	log.status = "ok";
 	reply.header("x-pg-cache", "hit");
 	reply.header("x-pg-cost-usd", "0.000000");
 
 	if (body.stream === true) {
+		// Route lookup requires usage for a stream, but retain this guard at the
+		// response boundary so a future caller cannot synthesize terminal tokens.
+		if (hit.usage === null) {
+			throw new Error("Streaming cache replay requires exact provider usage.");
+		}
 		reply.header("content-type", "text/event-stream");
 		reply.header("cache-control", "no-cache");
 		return reply.send(Readable.from(cacheReplayFrames(hit)));
@@ -359,6 +372,8 @@ async function* streamFrames(
 	let emittedVisibleChars = 0;
 	let iteratorCompleted = false;
 	let iteratorClosed = false;
+	const assembler =
+		body.pg_no_cache === true ? undefined : new StreamingResponseAssembler();
 	const closeIterator = async (): Promise<void> => {
 		if (iteratorCompleted || iteratorClosed || !iterator.return) {
 			return;
@@ -384,6 +399,7 @@ async function* streamFrames(
 			}
 			const chunk = result.value;
 			if (!chunk.done) {
+				assembler?.observePayload(chunk.data);
 				const reading = readStreamChunk(chunk.data);
 				if (firstTokenMs === undefined && reading.contentDelta !== null) {
 					firstTokenMs = elapsedMs(log.startedAtMs, now);
@@ -392,6 +408,8 @@ async function* streamFrames(
 				if (reading.usage !== null) {
 					usage = reading.usage;
 				}
+			} else {
+				assembler?.observeDone(chunk.data);
 			}
 			if (wasClientAborted()) {
 				break;
@@ -422,6 +440,27 @@ async function* streamFrames(
 		}
 		applyStreamMeter(db, log, body, usage, emittedVisibleChars);
 		log.status = "ok";
+		const assembled = assembler?.finish();
+		const pricedCost = log.costMicroUsd;
+		if (assembled && typeof pricedCost === "number" && iteratorCompleted) {
+			try {
+				upsertCacheEntry(db, {
+					hash: cacheKeyOf(body),
+					model: body.model,
+					response: assembled,
+					usage,
+					pricedCostMicroUsd: pricedCost,
+					ttlHours: config.CACHE_TTL_HOURS,
+				});
+			} catch (error) {
+				const failureType =
+					error instanceof Error ? error.name : "UnknownError";
+				request.log.warn(
+					{ provider, requestId: log.requestId, failureType },
+					"Failed to cache completed stream",
+				);
+			}
+		}
 	} catch (error) {
 		log.firstTokenMs = firstTokenMs ?? null;
 		if (wasClientAborted()) {
@@ -672,6 +711,7 @@ export function registerChatCompletionsRoute(
 				const hit = findAndRecordCacheHit(db, {
 					hash: cacheKeyOf(body),
 					model: body.model,
+					requireUsage: body.stream === true,
 				});
 				if (hit) {
 					return sendCacheHit(db, reply, log, body, hit);
@@ -744,6 +784,29 @@ export function registerChatCompletionsRoute(
 			log.costMicroUsd = meter.costMicroUsd;
 			log.costEstimated = meter.costEstimated;
 			log.status = "ok";
+			if (body.pg_no_cache !== true) {
+				try {
+					upsertCacheEntry(db, {
+						hash: cacheKeyOf(body),
+						model: body.model,
+						response,
+						usage: response.usage ?? null,
+						pricedCostMicroUsd: meter.costMicroUsd,
+						ttlHours: config.CACHE_TTL_HOURS,
+					});
+				} catch (error) {
+					const failureType =
+						error instanceof Error ? error.name : "UnknownError";
+					request.log.warn(
+						{
+							provider: routing.provider,
+							requestId: log.requestId,
+							failureType,
+						},
+						"Failed to cache completed response",
+					);
+				}
+			}
 
 			reply.header(
 				"x-pg-cost-usd",

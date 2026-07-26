@@ -7,6 +7,7 @@ import { config } from "./config.js";
 import { openDatabase } from "./db/index.js";
 import { migrate } from "./db/migrate.js";
 import { registerClientAuth } from "./pipeline/auth.js";
+import { deleteExpiredCacheEntries } from "./pipeline/cache.dao.js";
 import {
 	type Clock,
 	type ProviderAdapterRegistry,
@@ -44,6 +45,18 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
 
 	const db = openDatabase(dbPath);
 	migrate(db);
+	const cacheSweep = setInterval(
+		() => {
+			try {
+				deleteExpiredCacheEntries(db);
+			} catch {
+				// Cache cleanup is opportunistic; an operational failure must not take
+				// down the gateway or interfere with otherwise valid requests.
+			}
+		},
+		60 * 60 * 1_000,
+	);
+	cacheSweep.unref();
 
 	const adapters: ProviderAdapterRegistry = options.adapters ?? {
 		anthropic: createAnthropicAdapter({
@@ -83,6 +96,7 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
 	);
 
 	server.addHook("onClose", async () => {
+		clearInterval(cacheSweep);
 		db.close();
 	});
 

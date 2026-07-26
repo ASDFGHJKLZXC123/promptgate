@@ -7,7 +7,11 @@ import { afterEach, beforeEach, expect, test } from "vitest";
 
 import { openDatabase } from "../db/index.js";
 import { migrate } from "../db/migrate.js";
-import { findAndRecordCacheHit } from "./cache.dao.js";
+import {
+	deleteExpiredCacheEntries,
+	findAndRecordCacheHit,
+	upsertCacheEntry,
+} from "./cache.dao.js";
 
 let tempDbDir: string;
 let db: Database.Database;
@@ -150,4 +154,75 @@ test("treats conflicting response and usage payloads as a miss without increment
 		findAndRecordCacheHit(db, { hash: "cache-hash", model: "gpt-cache" }),
 	).toBeNull();
 	expect(hitCount()).toEqual({ hit_count: 0, last_hit_at: null });
+});
+
+test("stores a missing provider usage as JSON null and excludes it only from streaming replay", () => {
+	const { usage: _usage, ...responseWithoutUsage } = response;
+	upsertCacheEntry(db, {
+		hash: "cache-hash",
+		model: "gpt-cache",
+		response: responseWithoutUsage,
+		usage: null,
+		pricedCostMicroUsd: 12,
+		ttlHours: 1,
+	});
+
+	expect(
+		findAndRecordCacheHit(db, { hash: "cache-hash", model: "gpt-cache" }),
+	).toEqual({ response: responseWithoutUsage, usage: null });
+	expect(
+		findAndRecordCacheHit(db, {
+			hash: "cache-hash",
+			model: "gpt-cache",
+			requireUsage: true,
+		}),
+	).toBeNull();
+	expect(hitCount()).toEqual({ hit_count: 1, last_hit_at: expect.any(String) });
+});
+
+test("upsert refreshes the exact entry and hourly sweep only removes expired rows", () => {
+	upsertCacheEntry(db, {
+		hash: "cache-hash",
+		model: "gpt-cache",
+		response,
+		usage,
+		pricedCostMicroUsd: 9,
+		ttlHours: 1,
+	});
+	seedEntry({ hash: "expired-hash", expiresAt: "2000-01-01 00:00:00" });
+
+	expect(deleteExpiredCacheEntries(db)).toBe(1);
+	expect(
+		db.prepare("SELECT count(*) AS count FROM cache_entries").get(),
+	).toEqual({ count: 1 });
+	upsertCacheEntry(db, {
+		hash: "cache-hash",
+		model: "gpt-cache",
+		response,
+		usage,
+		pricedCostMicroUsd: 11,
+		ttlHours: 2,
+	});
+	expect(
+		db
+			.prepare(
+				"SELECT priced_cost_micro_usd, hit_count, last_hit_at FROM cache_entries WHERE hash = ?",
+			)
+			.get("cache-hash"),
+	).toEqual({ priced_cost_micro_usd: 11, hit_count: 0, last_hit_at: null });
+});
+
+test("rejects a non-integer or negative priced cache cost", () => {
+	for (const pricedCostMicroUsd of [-1, 1.5]) {
+		expect(() =>
+			upsertCacheEntry(db, {
+				hash: `cache-hash-${pricedCostMicroUsd}`,
+				model: "gpt-cache",
+				response,
+				usage,
+				pricedCostMicroUsd,
+				ttlHours: 1,
+			}),
+		).toThrow("nonnegative integer");
+	}
 });

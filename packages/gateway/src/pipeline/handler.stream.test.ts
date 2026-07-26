@@ -141,6 +141,13 @@ function contentFrame(text: string): SseChunk {
 		usage: null,
 	});
 }
+function finishFrame(reason = "stop"): SseChunk {
+	return frame({
+		...CHUNK_BASE,
+		choices: [{ index: 0, delta: {}, finish_reason: reason }],
+		usage: null,
+	});
+}
 function multiChoiceContentFrame(texts: string[]): SseChunk {
 	return frame({
 		...CHUNK_BASE,
@@ -348,6 +355,139 @@ async function readRow(
 }
 
 describe("POST /v1/chat/completions — streaming success", () => {
+	test("writes a fully assembled successful stream and replays it without a second provider call", async () => {
+		const db = openTestDb();
+		seedApiKey(db);
+		seedPricing(db, "gpt-stream-write", 1_000_000, 2_000_000);
+		let streamCalls = 0;
+		const adapter: ProviderAdapter = {
+			name: "openai",
+			async complete(): Promise<ChatResponse> {
+				throw new Error("unused");
+			},
+			async *stream(): AsyncIterable<SseChunk> {
+				streamCalls += 1;
+				yield roleFrame();
+				yield contentFrame("cached live stream");
+				yield finishFrame();
+				yield usageFrame({
+					prompt_tokens: 4,
+					completion_tokens: 2,
+					total_tokens: 6,
+				});
+				yield DONE;
+			},
+		};
+		const server = await buildTestServer({ openai: adapter });
+
+		try {
+			const first = await server.inject({
+				method: "POST",
+				url: "/v1/chat/completions",
+				headers: authHeaders(),
+				body: streamBody("gpt-stream-write"),
+			});
+			expect(first.headers["x-pg-cache"]).toBe("miss");
+			expect(streamCalls).toBe(1);
+			const entry = db
+				.prepare(
+					"SELECT response_json, usage_json, priced_cost_micro_usd FROM cache_entries",
+				)
+				.get() as {
+				response_json: string;
+				usage_json: string;
+				priced_cost_micro_usd: number;
+			};
+			expect(JSON.parse(entry.response_json)).toEqual({
+				id: "c",
+				object: "chat.completion",
+				created: 1,
+				model: "m",
+				choices: [
+					{
+						index: 0,
+						message: { role: "assistant", content: "cached live stream" },
+						finish_reason: "stop",
+					},
+				],
+				usage: { prompt_tokens: 4, completion_tokens: 2, total_tokens: 6 },
+			});
+			expect(JSON.parse(entry.usage_json)).toEqual({
+				prompt_tokens: 4,
+				completion_tokens: 2,
+				total_tokens: 6,
+			});
+			expect(entry.priced_cost_micro_usd).toBe(8);
+
+			const replay = await server.inject({
+				method: "POST",
+				url: "/v1/chat/completions",
+				headers: authHeaders(),
+				body: streamBody("gpt-stream-write"),
+			});
+			expect(replay.headers["x-pg-cache"]).toBe("hit");
+			expect(streamCalls).toBe(1);
+			const payloads = await parseClientSse(replay.payload);
+			expect(payloads.at(-1)).toBe("[DONE]");
+			expect(JSON.parse(payloads[0] ?? "{}")).toMatchObject({
+				id: "c",
+				object: "chat.completion.chunk",
+				choices: [
+					{
+						index: 0,
+						delta: { role: "assistant", content: "cached live stream" },
+						finish_reason: "stop",
+					},
+				],
+			});
+		} finally {
+			await server.close();
+			db.close();
+		}
+	});
+
+	test("does not cache a successful stream when assembly cannot preserve a delta", async () => {
+		const db = openTestDb();
+		seedApiKey(db);
+		seedPricing(db, "gpt-stream-ineligible", 1_000_000, 2_000_000);
+		const adapter = fakeStreamAdapter([
+			roleFrame(),
+			frame({
+				...CHUNK_BASE,
+				choices: [
+					{
+						index: 0,
+						delta: { content: "visible", refusal: "provider extension" },
+						finish_reason: null,
+					},
+				],
+				usage: null,
+			}),
+			finishFrame(),
+			usageFrame({ prompt_tokens: 4, completion_tokens: 1, total_tokens: 5 }),
+			DONE,
+		]);
+		const server = await buildTestServer({ openai: adapter });
+
+		try {
+			const response = await server.inject({
+				method: "POST",
+				url: "/v1/chat/completions",
+				headers: authHeaders(),
+				body: streamBody("gpt-stream-ineligible"),
+			});
+			expect(response.statusCode).toBe(200);
+			expect(response.payload).toContain("visible");
+			expect(response.payload).toContain("[DONE]");
+			expect(
+				db.prepare("SELECT count(*) AS count FROM cache_entries").get(),
+			).toEqual({ count: 0 });
+		} finally {
+			await server.close();
+			db.close();
+		}
+	});
+
 	test("replays a cache hit as valid compact SSE without invoking either adapter method", async () => {
 		const db = openTestDb();
 		seedApiKey(db);
@@ -808,6 +948,9 @@ describe("POST /v1/chat/completions — streaming error paths", () => {
 			expect(row.streamed).toBe(1);
 			expect(row.status).toBe("provider_error");
 			expect(row.error_code).toBe("provider_error");
+			expect(
+				db.prepare("SELECT count(*) AS count FROM cache_entries").get(),
+			).toEqual({ count: 0 });
 		} finally {
 			await server.close();
 			db.close();
@@ -959,6 +1102,9 @@ describe("POST /v1/chat/completions — streaming forwards before upstream close
 			expect(row.output_tokens).toBe(2);
 			expect(row.cost_micro_usd).toBe(6);
 			expect(row.first_token_ms).not.toBeNull();
+			expect(
+				db.prepare("SELECT count(*) AS count FROM cache_entries").get(),
+			).toEqual({ count: 0 });
 		} finally {
 			await server.close();
 			db.close();

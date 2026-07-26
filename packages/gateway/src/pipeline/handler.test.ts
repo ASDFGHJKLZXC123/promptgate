@@ -284,6 +284,34 @@ describe("POST /v1/chat/completions — success path", () => {
 			expect(row.streamed).toBe(0);
 			expect(row.cache_hit).toBe(0);
 			expect(row.total_ms).not.toBeNull();
+			expect(
+				db
+					.prepare(
+						"SELECT response_json, usage_json, priced_cost_micro_usd FROM cache_entries",
+					)
+					.get(),
+			).toEqual({
+				response_json: JSON.stringify(fakeChatResponse()),
+				usage_json: JSON.stringify({
+					prompt_tokens: 1,
+					completion_tokens: 1,
+					total_tokens: 2,
+				}),
+				priced_cost_micro_usd: 5,
+			});
+
+			const replay = await server.inject({
+				method: "POST",
+				url: "/v1/chat/completions",
+				headers: authHeaders(),
+				body: JSON.stringify({
+					model: "gpt-test-exact",
+					messages: [{ role: "user", content: "say hi" }],
+				}),
+			});
+			expect(replay.headers["x-pg-cache"]).toBe("hit");
+			expect(replay.headers["x-pg-cost-usd"]).toBe("0.000000");
+			expect(calls).toHaveLength(1);
 		} finally {
 			await server.close();
 			db.close();
@@ -337,6 +365,31 @@ describe("POST /v1/chat/completions — success path", () => {
 			expect(row.cost_micro_usd).toBe(8);
 			expect(row.cost_estimated).toBe(1);
 			expect(row.status).toBe("ok");
+			expect(db.prepare("SELECT usage_json FROM cache_entries").get()).toEqual({
+				usage_json: "null",
+			});
+			const replay = await server.inject({
+				method: "POST",
+				url: "/v1/chat/completions",
+				headers: authHeaders(),
+				body: JSON.stringify({
+					model: "gpt-test-estimate",
+					messages: [{ role: "user", content: "say hi" }],
+				}),
+			});
+			expect(replay.headers["x-pg-cache"]).toBe("hit");
+			expect(replay.headers["x-pg-cost-usd"]).toBe("0.000000");
+			await new Promise((resolve) => setTimeout(resolve, 20));
+			const replayRow = db
+				.prepare("SELECT * FROM requests WHERE request_id = ?")
+				.get(replay.headers["x-pg-request-id"]) as RequestsRow;
+			expect(replayRow).toMatchObject({
+				cache_hit: 1,
+				cost_micro_usd: 0,
+				cost_estimated: 1,
+				input_tokens: 2,
+				output_tokens: 3,
+			});
 		} finally {
 			await server.close();
 			db.close();
@@ -492,6 +545,13 @@ describe("POST /v1/chat/completions — cache read path", () => {
 			messages: [{ role: "user", content: "bypass" }],
 		};
 		seedCacheEntry(db, cachedRequest, fakeChatResponse({ model: "gpt-cache" }));
+		const sentinel = db
+			.prepare(
+				`SELECT hash, model, response_json, usage_json, priced_cost_micro_usd,
+				 expires_at, hit_count, last_hit_at
+				 FROM cache_entries`,
+			)
+			.get();
 		const { adapter, calls } = fakeAdapter(async () =>
 			fakeChatResponse({ model: "gpt-cache" }),
 		);
@@ -509,6 +569,15 @@ describe("POST /v1/chat/completions — cache read path", () => {
 			expect(db.prepare("SELECT hit_count FROM cache_entries").get()).toEqual({
 				hit_count: 0,
 			});
+			expect(
+				db
+					.prepare(
+						`SELECT hash, model, response_json, usage_json, priced_cost_micro_usd,
+						 expires_at, hit_count, last_hit_at
+						 FROM cache_entries`,
+					)
+					.get(),
+			).toEqual(sentinel);
 		} finally {
 			await server.close();
 			db.close();
