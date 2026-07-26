@@ -2,9 +2,9 @@
 
 Date: 2026-07-25
 
-Status: **pass — checkpoint A returned `proceed with adjustments`; explicit
-human approval pending**. The adjustments are completion-record updates only.
-Phase 3 has not started.
+Status: **pass — checkpoint A returned `proceed with adjustments`; human-approved
+on 2026-07-26**. The adjustments were completion-record updates only. Phase 3
+has not started.
 
 ## Commit sequence
 
@@ -276,5 +276,6 @@ started. No implementation adjustment or blocker remains.
   **pass**.
 - Phase 3 work: **not started**.
 
-No implementation or live-verification blocker remains. The project owner's
-explicit Phase 2 approval is still required before Phase 3.
+No implementation or live-verification blocker remains. The project owner
+explicitly approved the Phase 2 completion gate on 2026-07-26. Phase 3 has not
+started.
