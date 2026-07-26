@@ -234,20 +234,21 @@ Fixture activation is part of this Verify window and is the only Phase 2 point a
    ```
    Over limit → 429 `rate_limited` + `retry-after` header. (In-memory is correct here: single process by design, §3.)
 
-5. **Budget: reserve-then-reconcile** (§3.5 — a plain spend-sum is only a delayed soft limit). `src/pipeline/budget.ts`:
+5. **Budget: reserve-then-reconcile circuit breaker** (§3.5 — a plain spend-sum lets concurrent requests outrun rows already being written; provider-side spend limits remain the absolute monetary wall). `src/pipeline/budget.ts`:
    ```ts
    class BudgetGuard {
      // settled(keyId): SUM(cost_micro_usd) this month from DB, memoized briefly;
      //   invalidate(keyId) called on admin PATCH and on every reconcile
-     reserve(keyId, estMicroUsd): Reservation | "over_budget"
+     reserve(keyId, budgetMicroUsdMonth, estMicroUsd): Reservation | "over_budget"
      //   admits iff settled + inFlight + est <= budget; est = ceil(chars/4) input tokens
      //   × input rate + (max_tokens ?? DEFAULT_MAX_TOKENS) × output rate
-     reconcile(r: Reservation, actualMicroUsd): void   // release + invalidate memo
+     reconcileAfterDurableLog(r: Reservation, actualMicroUsd): void
+     retainDebt(r: Reservation, knownActualMicroUsd: number): void
    }
    ```
-   Over budget → 429 with `code: budget_exceeded, type: insufficient_quota`. Reconcile in the same place the `requests` row is written (including aborts).
+   Compute the estimate only after validation, provider/pricing resolution, and future prompt resolution. `chars/4` is an estimate, not a tokenizer upper bound, so describe this as a concurrency-safe in-process circuit breaker rather than an absolute provider-billing cap. Over budget → 429 with `code: budget_exceeded, type: insufficient_quota`. Keep each reservation active through every outcome, including cache hits and aborts, until the `requests` row is durably written; then reconcile and invalidate the memo. If that insert fails, retain at least `max(reserved, known_actual)` as in-memory debt and fail closed for the key. Admin PATCH invalidates settled/budget memo state but never active reservations.
 
-6. **Pipeline order — now fixed for good:** auth → rate limit → budget → validate → resolveProvider → [promptResolve: phase 4] → cache read → adapter → cache write → meter → log.
+6. **Pipeline order — now fixed for good:** auth → request-log init → rate limit → validate → resolveProvider + pricing → [promptResolve: phase 4] → budget reserve → cache read → adapter → meter → cache write → durable log + budget reconcile.
 
 **Verify phase 3** (settings changes go through the admin API — it invalidates the budget memo; direct sqlite UPDATEs don't and will appear not to work):
 ```bash
@@ -259,8 +260,8 @@ curl -s -X PATCH localhost:8787/admin/api/keys/1 -H "x-admin-token: $ADMIN_TOKEN
   -H 'content-type: application/json' -d '{"budget_micro_usd_month": 1}'
 curl -s ... | jq .error.code           # "budget_exceeded" on the very next call (reservation admits nothing)
 # rate limit: PATCH rate_limit_rpm=2, fire 5 requests in a loop → "rate_limited" on 3rd+
-# burst-overspend regression test: restore budget to a value < cost of 2 requests, fire 10 in parallel →
-#   exactly the reserved-affordable number reach the provider; the rest are 429s (this is the circuit-breaker proof)
+# burst-overspend regression test: restore budget to a value < 2 reservation estimates, fire 10 in parallel →
+#   exactly the reservation-affordable number reach the provider; the rest are 429s (the in-process concurrency proof)
 ```
 
 ### Phase 4 — Prompt registry

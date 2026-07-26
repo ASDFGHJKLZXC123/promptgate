@@ -21,7 +21,7 @@ These were not in the locked decisions; defaults chosen for lowest friction with
 | Dashboard front-end | Vite + vanilla TS + Chart.js (bundled by Vite, pinned version — no runtime CDN dependency) | built to static assets, served by gateway |
 | Dev runner | tsx watch | |
 | Container | multi-stage Dockerfile, `node:22-slim` runtime | better-sqlite3 is native — build deps stay in stage 1 |
-| Money | integer **micro-USD** everywhere (`*_micro_usd INTEGER`) | budgets are advertised as hard caps; no floating-point drift. Display layers divide by 1e6 |
+| Money | integer **micro-USD** everywhere (`*_micro_usd INTEGER`) | gateway budgets are concurrency-safe in-process circuit breakers; provider-side spend limits are the absolute monetary wall. No floating-point drift. Display layers divide by 1e6 |
 | Eval judge | `gpt-5.6-terra`, reasoning effort `high` | deterministic assertions run first; the LLM judge is called only for declared `llm-rubric` assertions |
 
 ## 2. Repo layout (decision #17: monorepo)
@@ -65,14 +65,15 @@ client (OpenAI SDK, base_url = PromptGate)
    │  POST /v1/chat/completions  (Bearer pg-key)
    ▼
 ┌──────────────────────── gateway (Fastify) ────────────────────────┐
-│ 1 auth        → api_keys lookup by key hash                       │
+│ 1 auth/log    → api_keys lookup; initialize request audit state   │
 │ 2 rate limit  → in-memory token bucket per key (rpm from DB)      │
-│ 3 budget      → month-to-date spend vs budget (30s cached)        │
+│ 3 validate    → Zod request boundary; resolve provider + pricing  │
 │ 4 prompt res. → if pg_prompt: fetch version, interpolate pg_vars  │
-│ 5 cache       → sha256(canonical request) → hit? replay & skip 6  │
-│ 6 provider    → prefix route; translate or compat-proxy by vendor │
-│ 7 meter       → tokens from usage, cost from model_pricing        │
-│ 8 log         → insert requests row (post-response, non-blocking) │
+│ 5 budget      → reserve estimated spend against settled+in-flight │
+│ 6 cache       → sha256(canonical request) → hit? replay & skip 7  │
+│ 7 provider    → prefix route; translate or compat-proxy by vendor │
+│ 8 meter/cache → meter success, then persist the priced cache row  │
+│ 9 log         → durable request row, then reconcile reservation   │
 └───────────────────────────────────────────────────────────────────┘
    also serves:  /admin/api/*  (admin token)   and  /  (dashboard UI)
 ```
@@ -129,10 +130,11 @@ Build-time sources verified 2026-07-25: [Gemini OpenAI compatibility](https://ai
 - All money is integer micro-USD (§1). Ordinary cost = `round(input_tokens × input_rate / 1e6) + round(output_tokens × output_rate / 1e6)`. Gemini billable output includes hidden thinking tokens, so its normalized output count is `total_tokens - prompt_tokens`; other approved providers use `completion_tokens`, which already reconciles with their totals. When a pricing row has `cached_input_micro_usd_per_mtok` and usage contains validated cache data — either DeepSeek's explicit hit/miss pair or Gemini's `prompt_tokens_details.cached_tokens` with misses derived from total prompt tokens — cost = `round(cache_hit_tokens × cached_input_rate / 1e6) + round(cache_miss_tokens × input_rate / 1e6) + round(output_tokens × output_rate / 1e6)`: the three billing components round independently before summing. If either the split or cached rate is absent, all input uses the ordinary rate. If both compatible cache representations appear, their cache-hit counts must agree. Validated `total_tokens` must be at least `prompt_tokens + completion_tokens`. Pricing is **date-effective** (see schema): a price change inserts a new row, historical requests keep their historical cost. `TODO(build-time)`: seed only human-approved current prices from all four providers' official pages.
 - If usage is missing (aborted stream, provider hiccup): estimate via a cheap tokenizer approximation and set `cost_estimated = 1` so dashboards can show estimated vs exact.
 - Rate limiting: token bucket per key, in-memory (single process, so fine); refill from `api_keys.rate_limit_rpm`.
-- **Budget is a hard cap via reserve-then-reconcile** (a post-hoc spend sum alone is only a delayed soft limit — a rapid loop overspends before rows land):
-  1. Before dispatch, compute a pessimistic reservation: estimated input tokens (chars/4) × input rate + `max_tokens` (or `DEFAULT_MAX_TOKENS`) × output rate.
+- **Budget is a concurrency-safe in-process circuit breaker via reserve-then-reconcile** (a post-hoc spend sum alone allows a rapid loop to outrun rows already being written). It is not advertised as an absolute provider-billing cap: chars/4 is an estimate rather than a tokenizer upper bound, so dedicated provider-side spend limits remain the outer monetary wall.
+  1. After request validation, provider/pricing resolution, and prompt resolution, but before cache/provider dispatch, compute the documented reservation estimate: input chars/4 × input rate + `max_tokens` (or `DEFAULT_MAX_TOKENS`) × output rate.
   2. Admission check: `settled_spend(month) + Σ in-flight reservations + this_reservation ≤ budget`, else `429` with `code: budget_exceeded, type: insufficient_quota` (OpenAI-style so SDK retry behavior is sane). Reservations live in an in-memory map (single process).
-  3. On completion/abort, release the reservation and record actual cost. Settled spend is a DB sum memoized briefly; the memo **must be invalidated** on key `PATCH` (budget change) and on every reconciliation for that key.
+  3. Keep the reservation active through success, cache hit, provider failure, timeout, and client abort until that outcome's `requests` row is durably inserted. Only then release it and invalidate the briefly memoized settled spend. If the insert fails, retain at least `max(reserved, known_actual)` as in-memory debt and fail closed for that key rather than reopening capacity.
+  4. A successful key `PATCH` invalidates that key's settled-spend/budget memo without clearing active reservations. The single-process design makes each admission/reconciliation turn synchronous; it prevents parallel calls from all observing the same pre-request spend.
 
 ### 3.6 Error taxonomy
 
@@ -453,7 +455,7 @@ jobs:
       - run: pnpm --filter @promptgate/evals exec pg-eval comment   # optional PR summary, needs GITHUB_TOKEN
 ```
 
-Cost control in CI (the decision-#2 trade-off, mitigated): the CI gateway key is created with a **$1 monthly budget** enforced by reserve-then-reconcile (§3.5) — a runaway loop fails the build with `budget_exceeded`; cheap pinned models; fresh DB per run keeps runs honest (the pennies are the price of trust). Secret hardening: use **dedicated provider keys for CI with provider-side spend limits** (the gateway budget can't stop PR code from calling providers directly with the env keys), keep the workflow on `pull_request` (not `pull_request_target`), and pin actions to full commit SHAs.
+Cost control in CI (the decision-#2 trade-off, mitigated): the CI gateway key is created with a **$1 monthly circuit-breaker budget** enforced by reserve-then-reconcile (§3.5) — a runaway loop fails the build with `budget_exceeded`; cheap pinned models; fresh DB per run keeps runs honest (the pennies are the price of trust). Secret hardening: use **dedicated provider keys for CI with provider-side spend limits as the absolute monetary wall** (the gateway estimate cannot stop PR code from calling providers directly with the env keys), keep the workflow on `pull_request` (not `pull_request_target`), and pin actions to full commit SHAs.
 
 ---
 
@@ -513,7 +515,7 @@ The phase-by-phase playbook — ordered steps, exact files, commands, key code, 
 | Streaming metering inaccurate (aborts, missing usage) | `cost_estimated` flag + estimated-vs-exact split visible in dashboard; never silently guess |
 | Pricing table goes stale → wrong costs | date-effective rows; startup warning if newest `effective_from` > 60 days old |
 | CI eval flakiness (LLM nondeterminism) fails good PRs | deterministic assertions dominate the gate; judge cases use threshold + `max-score-drop` band, not exact match; temperature 0 for eval traffic |
-| CI cost runaway | $1-budget CI key enforced by reserve-then-reconcile (§3.5); dedicated CI provider keys carry provider-side spend limits as the outer wall |
+| CI cost runaway | $1 circuit-breaker gateway budget enforced by reserve-then-reconcile (§3.5); dedicated CI provider keys carry provider-side spend limits as the absolute outer wall |
 | web_builder_llm needs tool calls (adapter gap) | resolve the `TODO(verify)` in phase 2, not phase 8; backup dogfood app named |
 | Scope creep toward SaaS (multi-tenant, orgs, SSO) | scope guard is in the idea file; admin auth stays a single env token by decision #15 |
 | SQLite write contention under load | WAL mode, single process, request logging is the only hot write path and it's one insert — fine for single-tenant reality |
