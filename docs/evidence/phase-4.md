@@ -2,7 +2,7 @@
 
 Date: 2026-07-26
 
-Status: **pass — awaiting explicit human approval**. Phase 5 has not started.
+Status: **pass — human-approved on 2026-07-26**. Phase 5 has not started.
 
 ## Commit sequence
 
@@ -400,5 +400,5 @@ HTTP/1.1 200 OK
 | Phase 5 not started | No eval-harness implementation was added | pass |
 
 All Phase 4 acceptance criteria pass. There is no remaining product blocker.
-The completion gate is awaiting explicit human approval, and Phase 5 has not
-started.
+The project owner explicitly approved the Phase 4 completion gate on
+2026-07-26. Phase 5 has not started.
