@@ -3,6 +3,7 @@ import { dirname } from "node:path";
 import fastify, { type FastifyInstance } from "fastify";
 
 import { registerAdminRoutes } from "./admin/keys.js";
+import { registerPromptAdminRoutes } from "./admin/prompts.js";
 import { config } from "./config.js";
 import { openDatabase } from "./db/index.js";
 import { migrate } from "./db/migrate.js";
@@ -92,6 +93,7 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
 	server.register(
 		(adminServer) => {
 			registerAdminRoutes(adminServer, db, budgetGuard);
+			registerPromptAdminRoutes(adminServer, db);
 		},
 		{ prefix: "/admin" },
 	);

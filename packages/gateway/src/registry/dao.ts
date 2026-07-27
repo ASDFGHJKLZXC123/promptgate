@@ -15,6 +15,12 @@ export interface StoredPrompt {
 	description: string | null;
 }
 
+export interface PromptSummary extends StoredPrompt {
+	created_at: string;
+	latest_version: number | null;
+	labels: Array<{ label: string; version: number }>;
+}
+
 export interface StoredPromptVersion {
 	promptId: number;
 	version: number;
@@ -42,6 +48,16 @@ interface PromptRow {
 	id: number;
 	slug: string;
 	description: string | null;
+}
+
+interface PromptSummaryRow extends PromptRow {
+	created_at: string;
+	latest_version: number | null;
+}
+
+interface PromptLabelRow {
+	label: string;
+	version: number;
 }
 
 interface VersionNumberRow {
@@ -84,6 +100,46 @@ export function createPrompt(
 		throw new Error("Failed to persist prompt");
 	}
 	return row;
+}
+
+/** Finds a prompt identity by its public slug. */
+export function findPromptBySlug(
+	db: Database.Database,
+	slug: string,
+): StoredPrompt | null {
+	const row = db
+		.prepare(
+			`SELECT id, slug, description
+			 FROM prompts
+			 WHERE slug = ?`,
+		)
+		.get(slug) as PromptRow | undefined;
+	return row ?? null;
+}
+
+/** Lists prompt identities with their current latest version and label pointers. */
+export function listPromptSummaries(db: Database.Database): PromptSummary[] {
+	const prompts = db
+		.prepare(
+			`SELECT p.id, p.slug, p.description, p.created_at,
+				MAX(pv.version) AS latest_version
+			 FROM prompts p
+			 LEFT JOIN prompt_versions pv ON pv.prompt_id = p.id
+			 GROUP BY p.id, p.slug, p.description, p.created_at
+			 ORDER BY p.slug ASC`,
+		)
+		.all() as PromptSummaryRow[];
+	const labelsForPrompt = db.prepare(
+		`SELECT label, version
+		 FROM prompt_labels
+		 WHERE prompt_id = ?
+		 ORDER BY label ASC`,
+	);
+
+	return prompts.map((prompt) => ({
+		...prompt,
+		labels: labelsForPrompt.all(prompt.id) as PromptLabelRow[],
+	}));
 }
 
 /**
@@ -138,6 +194,31 @@ export function addVersion(
 			notes: row.notes,
 		};
 	})();
+}
+
+/** Reads one immutable version for a prompt, or returns null when absent. */
+export function findPromptVersion(
+	db: Database.Database,
+	promptId: number,
+	version: number,
+): StoredPromptVersion | null {
+	const row = db
+		.prepare(
+			`SELECT prompt_id, version, messages_json, variables_json, notes
+			 FROM prompt_versions
+			 WHERE prompt_id = @prompt_id AND version = @version`,
+		)
+		.get({ prompt_id: promptId, version }) as VersionRow | undefined;
+	if (!row) {
+		return null;
+	}
+	return {
+		promptId: row.prompt_id,
+		version: row.version,
+		messages_json: row.messages_json,
+		variables_json: row.variables_json,
+		notes: row.notes,
+	};
 }
 
 /**
