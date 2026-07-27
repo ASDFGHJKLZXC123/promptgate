@@ -8,7 +8,7 @@ const dataset = {
 	datasetHash: "hash",
 	description: "Safety",
 	prompts: ["safety@candidate"],
-	providers: ["gpt-5.6-luna"],
+	providers: ["gemini-2.5-flash", "deepseek-v4-flash"],
 	defaultTest: { threshold: 1 },
 	tests: [
 		{
@@ -108,13 +108,17 @@ describe("eval runner", () => {
 			],
 		};
 		const gateway = {
-			complete: vi.fn().mockImplementation(async (call: { model: string }) => ({
-				content:
-					call.model === "gpt-5.6-terra"
-						? '{"pass":true,"score":0.86,"rationale":"ok"}'
-						: "candidate",
-				costMicroUsd: 1,
-			})),
+			complete: vi
+				.fn()
+				.mockImplementation(
+					async (call: { model: string; prompt: string }) => ({
+						content:
+							call.prompt === "judge_rubric_v1@1"
+								? '{"pass":true,"score":0.86,"rationale":"ok"}'
+								: "candidate",
+						costMicroUsd: 1,
+					}),
+				),
 		};
 		const order: string[] = [];
 		const admin = {
@@ -142,20 +146,20 @@ describe("eval runner", () => {
 					{
 						dataset_hash: "newer-other-hash",
 						prompt_ref: "safety@prod",
-						model: "gpt-5.6-luna",
+						model: "gemini-2.5-flash",
 						score_avg: 0.99,
 					},
 					{
 						dataset_hash: "hash",
 						prompt_ref: "safety@prod",
-						model: "gpt-5.6-luna",
+						model: "gemini-2.5-flash",
 						score_avg: 0.9,
 					},
 					{
 						dataset_hash: "hash",
 						prompt_ref: "safety@prod",
-						model: "gpt-5.6-luna",
-						score_avg: 0.99,
+						model: "deepseek-v4-flash",
+						score_avg: 0.9,
 					},
 				];
 			}),
@@ -177,7 +181,13 @@ describe("eval runner", () => {
 			),
 		).resolves.toMatchObject({ exitCode: 0 });
 		expect(order[0]).toBe("history");
-		expect(order).toEqual(["history", "upsert", "persist"]);
+		expect(order).toEqual([
+			"history",
+			"history",
+			"upsert",
+			"persist",
+			"persist",
+		]);
 	});
 
 	test("fails before any mutation or provider call when history has no exact match", async () => {
@@ -200,7 +210,7 @@ describe("eval runner", () => {
 				{
 					dataset_hash: "other",
 					prompt_ref: "safety@prod",
-					model: "gpt-5.6-luna",
+					model: "gemini-2.5-flash",
 					score_avg: null,
 				},
 			]),
@@ -221,7 +231,7 @@ describe("eval runner", () => {
 		expect(gateway.complete).not.toHaveBeenCalled();
 	});
 
-	test("rejects an undeclared prompt, duplicate model, or unsupported model before gateway traffic", async () => {
+	test("requires the exact Gemini and DeepSeek target set before admin or gateway traffic", async () => {
 		const gateway = { complete: vi.fn() };
 		const admin = {
 			promptSummaries: vi.fn(),
@@ -231,7 +241,11 @@ describe("eval runner", () => {
 		};
 		for (const changed of [
 			{ ...dataset, prompts: ["other@candidate"] },
-			{ ...dataset, providers: ["gpt-5.6-luna", "gpt-5.6-luna"] },
+			{ ...dataset, providers: ["gemini-2.5-flash"] },
+			{ ...dataset, providers: ["deepseek-v4-flash"] },
+			{ ...dataset, providers: ["gemini-2.5-flash", "gemini-2.5-flash"] },
+			{ ...dataset, providers: ["deepseek-v4-flash", "gemini-2.5-flash"] },
+			{ ...dataset, providers: ["gpt-5.6-luna"] },
 			{ ...dataset, providers: ["not-a-model"] },
 		]) {
 			await expect(
@@ -278,12 +292,14 @@ describe("eval runner", () => {
 			},
 		);
 		expect(result.exitCode).toBe(0);
-		expect(result.markdown).toContain("| case-a | gpt-5.6-luna | pass |");
+		expect(result.markdown).toContain("| case-a | gemini-2.5-flash | pass |");
 		expect(gateway.complete.mock.calls.map(([call]) => call.prompt)).toEqual([
 			"safety@1",
+			"safety@1",
+			"safety@2",
 			"safety@2",
 		]);
-		expect(admin.createRun).toHaveBeenCalledTimes(2);
+		expect(admin.createRun).toHaveBeenCalledTimes(4);
 		expect(admin.createRun.mock.calls[0]?.[0]).toMatchObject({
 			prompt_version: 1,
 			dataset_id: 4,
@@ -303,13 +319,14 @@ describe("eval runner", () => {
 			],
 		};
 		const gateway = {
-			complete: vi
-				.fn()
-				.mockResolvedValueOnce({ content: "safe", costMicroUsd: 3 })
-				.mockResolvedValueOnce({
-					content: '{"pass":true,"score":1,"rationale":"safe"}',
-					costMicroUsd: 2,
-				}),
+			complete: vi.fn().mockImplementation(async (call: { prompt: string }) =>
+				call.prompt === "judge_rubric_v1@1"
+					? {
+							content: '{"pass":true,"score":1,"rationale":"safe"}',
+							costMicroUsd: 2,
+						}
+					: { content: "safe", costMicroUsd: 3 },
+			),
 		};
 		const admin = {
 			promptSummaries: vi.fn().mockResolvedValue([
@@ -340,7 +357,7 @@ describe("eval runner", () => {
 			},
 		);
 
-		expect(gateway.complete).toHaveBeenCalledTimes(2);
+		expect(gateway.complete).toHaveBeenCalledTimes(4);
 		expect(gateway.complete.mock.calls.every(([call]) => call.allowCache)).toBe(
 			true,
 		);

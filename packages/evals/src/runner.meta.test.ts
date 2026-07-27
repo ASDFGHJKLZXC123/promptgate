@@ -8,7 +8,7 @@ import type {
 	GatewayConfig,
 	GatewayResponse,
 } from "./gateway-client.js";
-import { JUDGE_MODEL, JUDGE_PROMPT_REF } from "./judge.js";
+import { JUDGE_PROMPT_REF } from "./judge.js";
 import type { EvalRunDependencies, EvalRunnerOptions } from "./runner.js";
 import { runEvaluation } from "./runner.js";
 
@@ -17,7 +17,7 @@ const fixture: LoadedDataset = {
 	datasetHash: "meta-hash",
 	description: "Fixture eval of evals",
 	prompts: ["safety@candidate"],
-	providers: ["gpt-5.6-luna", "gemini-2.5-flash"],
+	providers: ["gemini-2.5-flash", "deepseek-v4-flash"],
 	defaultTest: { threshold: 1 },
 	tests: [
 		{
@@ -62,7 +62,7 @@ function createFakeDependencies(
 } {
 	const persisted: PersistedRun[] = [];
 	const calls = vi.fn(async (call: GatewayCall): Promise<GatewayResponse> => {
-		if (call.model !== JUDGE_MODEL) {
+		if (call.prompt !== JUDGE_PROMPT_REF) {
 			return fakeResponse(
 				`safe ${call.model} ${call.prompt} ${String(call.vars.case)}`,
 				10,
@@ -207,32 +207,32 @@ describe("Phase 5 eval-of-evals regression", () => {
 			markdown: [
 				"| case | model | pass | score | first failed detail |",
 				"|---|---|---|---|---|",
-				"| safe-case | gpt-5.6-luna | pass | 0.75 |  |",
-				"| risk-case | gpt-5.6-luna | fail | 0.25 | rubric failed |",
 				"| safe-case | gemini-2.5-flash | pass | 0.75 |  |",
 				"| risk-case | gemini-2.5-flash | fail | 0.25 | rubric failed |",
+				"| safe-case | deepseek-v4-flash | pass | 0.75 |  |",
+				"| risk-case | deepseek-v4-flash | fail | 0.25 | rubric failed |",
 			].join("\n"),
 			warnings: ["fixture warning"],
 		});
 		expect(calls).toHaveBeenCalledTimes(16);
 		expect(calls.mock.calls.map(([call]) => [call.model, call.prompt])).toEqual(
 			[
-				["gpt-5.6-luna", "safety@1"],
-				[JUDGE_MODEL, JUDGE_PROMPT_REF],
-				["gpt-5.6-luna", "safety@1"],
-				[JUDGE_MODEL, JUDGE_PROMPT_REF],
 				["gemini-2.5-flash", "safety@1"],
-				[JUDGE_MODEL, JUDGE_PROMPT_REF],
+				["deepseek-v4-flash", JUDGE_PROMPT_REF],
 				["gemini-2.5-flash", "safety@1"],
-				[JUDGE_MODEL, JUDGE_PROMPT_REF],
-				["gpt-5.6-luna", "safety@2"],
-				[JUDGE_MODEL, JUDGE_PROMPT_REF],
-				["gpt-5.6-luna", "safety@2"],
-				[JUDGE_MODEL, JUDGE_PROMPT_REF],
+				["deepseek-v4-flash", JUDGE_PROMPT_REF],
+				["deepseek-v4-flash", "safety@1"],
+				["gemini-2.5-flash", JUDGE_PROMPT_REF],
+				["deepseek-v4-flash", "safety@1"],
+				["gemini-2.5-flash", JUDGE_PROMPT_REF],
 				["gemini-2.5-flash", "safety@2"],
-				[JUDGE_MODEL, JUDGE_PROMPT_REF],
+				["deepseek-v4-flash", JUDGE_PROMPT_REF],
 				["gemini-2.5-flash", "safety@2"],
-				[JUDGE_MODEL, JUDGE_PROMPT_REF],
+				["deepseek-v4-flash", JUDGE_PROMPT_REF],
+				["deepseek-v4-flash", "safety@2"],
+				["gemini-2.5-flash", JUDGE_PROMPT_REF],
+				["deepseek-v4-flash", "safety@2"],
+				["gemini-2.5-flash", JUDGE_PROMPT_REF],
 			],
 		);
 		expect(persisted).toHaveLength(4);
@@ -247,28 +247,28 @@ describe("Phase 5 eval-of-evals regression", () => {
 		).toEqual([
 			{
 				prompt_ref: "safety@prod",
-				model: "gpt-5.6-luna",
+				model: "gemini-2.5-flash",
 				score_avg: 0.75,
 				cost_micro_usd: 24,
 				resultCosts: [12, 12],
 			},
 			{
 				prompt_ref: "safety@prod",
-				model: "gemini-2.5-flash",
+				model: "deepseek-v4-flash",
 				score_avg: 0.75,
 				cost_micro_usd: 24,
 				resultCosts: [12, 12],
 			},
 			{
 				prompt_ref: "safety@candidate",
-				model: "gpt-5.6-luna",
+				model: "gemini-2.5-flash",
 				score_avg: 0.5,
 				cost_micro_usd: 24,
 				resultCosts: [12, 12],
 			},
 			{
 				prompt_ref: "safety@candidate",
-				model: "gemini-2.5-flash",
+				model: "deepseek-v4-flash",
 				score_avg: 0.5,
 				cost_micro_usd: 24,
 				resultCosts: [12, 12],

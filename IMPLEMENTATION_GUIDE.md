@@ -1,6 +1,6 @@
 # PromptGate — Implementation Guide
 
-Companion to `PromptGate_PROJECT_IDEA.md`. All 17 locked decisions (2026-07-12) are treated as fixed except the human-approved amendments recorded in `PROGRESS.md`: decision #2 expanded to OpenAI, Anthropic, Gemini, and DeepSeek on 2026-07-25, and decision #12 received the verified carematch provenance correction on 2026-07-26. `GEMINI_API_KEY`/`DEEPSEEK_API_KEY` join the optional-at-boot provider keys (§1's config, BUILD_PLAYBOOK.md phase 1 step 9). The carematch `TODO(verify)` is resolved in §7.3 from the immutable public source plus retained build-session evidence; `web_builder_llm` references still carry `TODO(verify)` markers to confirm against the finished repository when their phases consume them.
+Companion to `PromptGate_PROJECT_IDEA.md`. All 17 locked decisions (2026-07-12) are treated as fixed except the human-approved amendments recorded in `PROGRESS.md`: decision #2 expanded to OpenAI, Anthropic, Gemini, and DeepSeek on 2026-07-25; decision #12 received the verified carematch provenance correction on 2026-07-26; and decision #11 narrowed the Phase 5 target/judge gate to Gemini 2.5 Flash and DeepSeek V4 Flash with cross-provider judging on 2026-07-27. `GEMINI_API_KEY`/`DEEPSEEK_API_KEY` join the optional-at-boot provider keys (§1's config, BUILD_PLAYBOOK.md phase 1 step 9). The carematch `TODO(verify)` is resolved in §7.3 from the immutable public source plus retained build-session evidence; `web_builder_llm` references still carry `TODO(verify)` markers to confirm against the finished repository when their phases consume them.
 
 ---
 
@@ -22,7 +22,7 @@ These were not in the locked decisions; defaults chosen for lowest friction with
 | Dev runner | tsx watch | |
 | Container | multi-stage Dockerfile, `node:22-slim` runtime | better-sqlite3 is native — build deps stay in stage 1 |
 | Money | integer **micro-USD** everywhere (`*_micro_usd INTEGER`) | gateway budgets are concurrency-safe in-process circuit breakers; provider-side spend limits are the absolute monetary wall. No floating-point drift. Display layers divide by 1e6 |
-| Eval judge | `gpt-5.6-terra`, reasoning effort `high` | deterministic assertions run first; the LLM judge is called only for declared `llm-rubric` assertions |
+| Phase 5 eval judge | cross-provider: `deepseek-v4-flash` judges Gemini; `gemini-2.5-flash` judges DeepSeek | deterministic assertions run first; the LLM judge is called only for declared `llm-rubric` assertions; no self-judging or reasoning-effort override |
 
 ## 2. Repo layout (decision #17: monorepo)
 
@@ -99,7 +99,7 @@ The prefix-selected provider must equal the provider on the current date-effecti
 - `system` role message(s) → Anthropic `system` param (concatenate if multiple).
 - `max_tokens` required by Anthropic → default from config if client omits.
 - Non-streaming: map `content`, `stop_reason` → `finish_reason`, `usage.{input,output}_tokens` → `prompt/completion_tokens`.
-- `response_format: {type: "json_object" | "json_schema"}` → Anthropic native structured outputs via `output_config.format` (the successor to the `output_format` beta param — confirm the current name against Anthropic's structured-outputs docs at build time). This preserves cross-provider structured-output compatibility; the default judge itself is OpenAI-routed (§7.2).
+- `response_format: {type: "json_object" | "json_schema"}` → Anthropic native structured outputs via `output_config.format` (the successor to the `output_format` beta param — confirm the current name against Anthropic's structured-outputs docs at build time). This preserves cross-provider structured-output compatibility; Phase 5's amended judges use the Gemini/DeepSeek compatible routes (§7.2), while Anthropic structured-output translation remains available to other gateway clients.
 - Streaming: translate Anthropic SSE events into OpenAI `chat.completion.chunk` frames. Usage arrives split: `input_tokens` on `message_start`, `output_tokens` on `message_delta` — combine both for the final usage chunk (decision #3's metering path).
 - **Tool calls: out of scope for v1.** Return a 400 (`tools not supported for anthropic-routed models yet`) rather than a broken translation. `TODO(verify)`: check whether web_builder_llm actually sends `tools`; if yes, tool translation moves from stretch into Phase 2, because dogfooding (deliverable 5) depends on it.
 - OpenAI-routed models: pure passthrough (headers scrubbed, auth swapped) — no body rewriting.
@@ -371,8 +371,6 @@ description: Safety screening triage (seeded from carematch_ai)
 prompts:
   - safety_screen@candidate          # PromptGate extension: registry refs, not inline prompts
 providers:
-  - claude-sonnet-5
-  - gpt-5.6-luna
   - gemini-2.5-flash
   - deepseek-v4-flash
 defaultTest:
@@ -405,8 +403,8 @@ pg-eval run --dataset safety_screening --prompt safety_screen@candidate \
             --key $PG_EVAL_KEY --admin-token $PG_ADMIN_TOKEN
 ```
 
-- All eval traffic goes **through the gateway itself** (dogfooding: evals get metered and budgeted like any client) with `pg_no_cache: true` — persisted quality measurements must hit live models or drift stays invisible (`--allow-cache` exists for local harness development only and marks the run `trigger: 'manual'`). Judge calls also go through the gateway using **`gpt-5.6-terra` with `reasoning_effort: "high"`** (decision #11) and `response_format: {type: "json_object"}`; rubric prompts live in the registry (`judge_rubric_v1`) like any other prompt. The four-provider amendment does not replace that locked judge: Phase 5 remains blocked until a working OpenAI key exists, unless the human separately amends decision #11. This future prerequisite is not a Phase 1 blocker.
-- Eval requests use `temperature: 0` where the pinned model supports it. The pinned `claude-sonnet-5` path omits `temperature` because its Anthropic translation accepts only the provider default; the locked `gpt-5.6-terra` judge remains at `temperature: 0` (human-approved amendment, 2026-07-26).
+- All eval traffic goes **through the gateway itself** (dogfooding: evals get metered and budgeted like any client) with `pg_no_cache: true` — persisted quality measurements must hit live models or drift stays invisible (`--allow-cache` exists for local harness development only and marks the run `trigger: 'manual'`). The human-approved Phase 5 matrix contains exactly **`gemini-2.5-flash` and `deepseek-v4-flash`** as targets. Judge calls also go through the gateway and cross providers: DeepSeek judges Gemini output, while Gemini judges DeepSeek output. Neither model may judge itself. Each judge uses `response_format: {type: "json_object"}` and the immutable registry prompt `judge_rubric_v1@1`.
+- Phase 5 target and judge requests use `temperature: 0`. Judge requests send no `reasoning_effort`, because that is not part of the approved Gemini/DeepSeek compatibility contract. OpenAI and Anthropic remain supported gateway providers but are not Phase 5 target or judge models. This amendment does not waive Phase 6's separate four-provider requirement.
 - Label freezing: at run start, every label ref (`@candidate`, `@prod`) is resolved to a concrete version once; all cases in the run use that version, and it's what `eval_runs.prompt_version` records.
 - One `eval_runs` row per model: N models in the dataset = N runs sharing a `git_sha`, each with its own results (matches the schema's `(run_id, case_id)` key).
 - Deterministic assertions run first and short-circuit; the judge only runs on cases that declare `llm-rubric` — decision #11's cost control.
@@ -516,7 +514,7 @@ The phase-by-phase playbook — ordered steps, exact files, commands, key code, 
 | Provider wire-format drift breaks adapters | nightly contract tests (§11); adapters validate with Zod and fail loud, never coerce silently |
 | Streaming metering inaccurate (aborts, missing usage) | `cost_estimated` flag + estimated-vs-exact split visible in dashboard; never silently guess |
 | Pricing table goes stale → wrong costs | date-effective rows; startup warning if newest `effective_from` > 60 days old |
-| CI eval flakiness (LLM nondeterminism) fails good PRs | deterministic assertions dominate the gate; judge cases use threshold + `max-score-drop` band, not exact match; temperature 0 where supported, with pinned `claude-sonnet-5` using its required provider-default temperature |
+| CI eval flakiness (LLM nondeterminism) fails good PRs | deterministic assertions dominate the gate; judge cases use threshold + `max-score-drop` band, not exact match; Phase 5 pins Gemini 2.5 Flash and DeepSeek V4 Flash at temperature zero and cross-judges instead of self-judging |
 | CI cost runaway | $1 circuit-breaker gateway budget enforced by reserve-then-reconcile (§3.5); dedicated CI provider keys carry provider-side spend limits as the absolute outer wall |
 | web_builder_llm needs tool calls (adapter gap) | resolve the `TODO(verify)` in phase 2, not phase 8; backup dogfood app named |
 | Scope creep toward SaaS (multi-tenant, orgs, SSO) | scope guard is in the idea file; admin auth stays a single env token by decision #15 |

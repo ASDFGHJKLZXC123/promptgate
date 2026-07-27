@@ -31,12 +31,7 @@ const safeLanguageModule = (await import(
 	)
 )) as SafeLanguageModule;
 
-const EXPECTED_PROVIDERS = [
-	"claude-sonnet-5",
-	"gpt-5.6-luna",
-	"gemini-2.5-flash",
-	"deepseek-v4-flash",
-];
+const EXPECTED_PROVIDERS = ["gemini-2.5-flash", "deepseek-v4-flash"];
 const RUBRIC_IDS = new Set([
 	"observed_stomach_pain_nausea_none_01",
 	"observed_chest_pain_trouble_breathing_urgent_01",

@@ -7,7 +7,16 @@ import type {
 } from "./assertions.js";
 import type { GatewayCall, GatewayClient } from "./gateway-client.js";
 
-export const JUDGE_MODEL = "gpt-5.6-terra" as const;
+export const PHASE_5_TARGET_MODELS = Object.freeze([
+	"gemini-2.5-flash",
+	"deepseek-v4-flash",
+] as const);
+export type Phase5TargetModel = (typeof PHASE_5_TARGET_MODELS)[number];
+
+export const JUDGE_MODEL_BY_TARGET = Object.freeze({
+	"gemini-2.5-flash": "deepseek-v4-flash",
+	"deepseek-v4-flash": "gemini-2.5-flash",
+} satisfies Record<Phase5TargetModel, Phase5TargetModel>);
 export const JUDGE_PROMPT_REF = "judge_rubric_v1@1" as const;
 export const MAX_JUDGE_RATIONALE_LENGTH = 1_000;
 
@@ -28,6 +37,21 @@ export class JudgeInfrastructureError extends Error {
 		super(message, options);
 		this.name = "JudgeInfrastructureError";
 	}
+}
+
+export function judgeModelForTarget(model: string): Phase5TargetModel {
+	if (!Object.hasOwn(JUDGE_MODEL_BY_TARGET, model)) {
+		throw new JudgeInfrastructureError(
+			"Phase 5 requires Gemini or DeepSeek as the target model.",
+		);
+	}
+	const judge = JUDGE_MODEL_BY_TARGET[model as Phase5TargetModel];
+	if (judge === model) {
+		throw new JudgeInfrastructureError(
+			"A judge must not evaluate its own output.",
+		);
+	}
+	return judge;
 }
 
 function serializeUntrusted(value: unknown): string {
@@ -78,15 +102,16 @@ function parseJudgeResponse(content: string): RubricOutcome {
 /** Creates the Step 5 judge without performing a request until an assertion runs. */
 export function createGatewayRubricEvaluator(
 	client: JudgeGateway | GatewayClient,
+	targetModel: string,
 ): RubricEvaluator {
+	const judgeModel = judgeModelForTarget(targetModel);
 	return async (input) => {
 		let response: { content: string };
 		try {
 			response = await client.complete({
-				model: JUDGE_MODEL,
+				model: judgeModel,
 				prompt: JUDGE_PROMPT_REF,
 				vars: judgeVars(input),
-				reasoningEffort: "high",
 				responseFormat: { type: "json_object" },
 			});
 		} catch (error) {

@@ -108,7 +108,7 @@ Build order matters here: types → pricing → keys → auth → adapter → ro
 
 1. **Wire types in `shared`.** Zod schemas for the OpenAI chat request/response (only fields we touch: `model, messages, temperature, top_p, max_tokens, stream, stop, response_format, reasoning_effort, usage, choices`) plus the `pg_*` extension fields (§5.1). Export inferred TS types. Everything downstream imports these — never redefine wire shapes locally.
 
-2. **Pricing seed.** `packages/gateway/scripts/seed-pricing.ts` upserts rows into `model_pricing` from a checked-in `pricing.json`. `TODO(build-time)`: fill `pricing.json` from every approved provider's current pricing page; include only models the gateway will actually route, including the locked `gpt-5.6-terra` eval judge.
+2. **Pricing seed.** `packages/gateway/scripts/seed-pricing.ts` upserts rows into `model_pricing` from a checked-in `pricing.json`. `TODO(build-time)`: fill `pricing.json` from every approved provider's current pricing page; include only models the gateway will actually route, including the then-locked `gpt-5.6-terra` eval judge. The later Phase 5 judge amendment does not delete an already supported/priced route.
 
 3. **Key management (admin).** `src/admin/keys.ts`:
    - keygen: `"pg-" + randomBytes(24).toString("hex")`, store `sha256(key)`, return plaintext **once** in the POST response.
@@ -304,7 +304,7 @@ sqlite3 data/promptgate.db "SELECT prompt_id, prompt_version FROM requests ORDER
 
 ### Phase 5 — Eval harness (`pg-eval`)
 
-Future prerequisite (not a Phase 1 blocker): decision #11 still locks the live judge to `gpt-5.6-terra`, so Phase 5 cannot pass its verify block without a working `OPENAI_API_KEY` unless the human separately amends that decision.
+Human-approved gate amendment (2026-07-27): Phase 5 runs exactly `gemini-2.5-flash` and `deepseek-v4-flash` as targets and cross-judges them. DeepSeek judges Gemini output, Gemini judges DeepSeek output, and neither model judges itself. OpenAI and Anthropic remain supported gateway providers but are not Phase 5 target or judge models. Phase 6's later four-provider requirement is unchanged.
 
 1. **Package scaffold.** `packages/evals`: deps `yaml zod`, bin entry `pg-eval` → `src/cli.ts` (hand-rolled arg parsing or `node:util` parseArgs — no commander needed for 3 commands: `run`, `seed-ci`, `comment`).
 
@@ -320,9 +320,9 @@ Future prerequisite (not a Phase 1 blocker): decision #11 still locks the live j
    ```
    Order within a case: deterministic ones first, short-circuit on fail, `llm-rubric` last (§7.2 cost control).
 
-4. **Gateway client.** Thin fetch wrapper (base URL + key from flags/env). Eval calls use `temperature: 0` where supported; for pinned `claude-sonnet-5`, omit `temperature` because its Anthropic path rejects non-default temperature (human-approved amendment, 2026-07-26). The locked `gpt-5.6-terra` judge still uses `temperature: 0`. All calls set **`pg_no_cache: true`** (persisted quality runs must hit live models — cached responses conceal provider drift; `--allow-cache` is for local harness development only) and `pg_feature: "eval"`.
+4. **Gateway client.** Thin fetch wrapper (base URL + key from flags/env). Phase 5 target and judge calls use `temperature: 0`; judge calls send no provider-specific reasoning-effort override. All calls set **`pg_no_cache: true`** (persisted quality runs must hit live models — cached responses conceal provider drift; `--allow-cache` is for local harness development only) and `pg_feature: "eval"`.
 
-5. **Judge.** `llmRubric` calls the gateway with **`model: "gpt-5.6-terra"` and `reasoning_effort: "high"`** plus registry prompt `judge_rubric_v1` (create it via seed script — the rubric prompt is itself versioned, per §7.2), `response_format: {type: "json_object"}`, then parses `{pass, score, rationale}`. The model and effort are locked by decision #11, not silently downgraded for cost. Malformed judge output = infrastructure error (exit 2), not a case failure.
+5. **Judge.** `llmRubric` calls the gateway through the locked cross-provider map: **Gemini target → DeepSeek judge; DeepSeek target → Gemini judge**. It uses registry prompt `judge_rubric_v1@1` (create it via seed script — the rubric prompt is itself versioned, per §7.2), `response_format: {type: "json_object"}`, and parses `{pass, score, rationale}`. Reject every unapproved target model before admin mutation or provider traffic, and reject any self-judge mapping. Malformed judge output = infrastructure error (exit 2), not a case failure.
 
 6. **Run + persist + compare.** At start: resolve every label ref to a concrete version (frozen for the whole run, §7.2) and upsert the dataset via `POST /admin/api/evals/datasets`. Runner creates **one `eval_runs` row per model**, loops that model's cases, persists run + results via `POST /admin/api/evals/runs` (admin token from `--admin-token`/`PG_ADMIN_TOKEN` — eval traffic and persistence use different credentials, §5.2). `--baseline prod` is **paired**: run the baseline ref first, then the candidate, compare within the pair (works in a fresh CI database); `--baseline-from-history` for cheap local iteration only. Apply §7.2's exit-code contract verbatim. Print the markdown summary table (case, model, pass, score, first failed assertion detail).
 
@@ -343,7 +343,7 @@ Plus the §11 meta-test: fixture dataset + fake provider → assert exact pass/f
 
 1. **Seed script.** `pg-eval seed-ci` (runs against a fresh gateway): create key `ci-evals` with `budget_micro_usd_month: 1000000` ($1 — §7.4's circuit breaker, enforced by reserve-then-reconcile), create `safety_screen` + `judge_rubric_v1` prompts from checked-in JSON fixtures (`packages/evals/fixtures/prompts/*.json`), set labels `prod` and `candidate`, register the dataset. Idempotent (safe to re-run).
 
-2. **Secrets.** Create **dedicated CI keys at each provider with provider-side spend limits** (the gateway's $1 budget can't stop PR code from calling providers directly with the env keys) and add them as `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`, and `DEEPSEEK_API_KEY` repo secrets. Phase 6 cannot close without the OpenAI key required by the locked `gpt-5.6-terra` judge; any further provider omission needs a separate human gate amendment. `ADMIN_TOKEN` for CI is generated per-run — the workflow writes it and the provider keys into `.env` so **docker compose actually passes them to the gateway container** (secrets set only on a step's `env:` never reach the container).
+2. **Secrets.** Create **dedicated CI keys at each provider with provider-side spend limits** (the gateway's $1 budget can't stop PR code from calling providers directly with the env keys) and add them as `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`, and `DEEPSEEK_API_KEY` repo secrets. The Phase 5 Gemini/DeepSeek amendment does not waive Phase 6's four-provider requirement; any Phase 6 provider omission needs a separate human gate amendment. `ADMIN_TOKEN` for CI is generated per-run — the workflow writes it and the provider keys into `.env` so **docker compose actually passes them to the gateway container** (secrets set only on a step's `env:` never reach the container).
 
 3. **Workflow.** Commit §7.4's `eval-gate.yml`, replacing every `<pinned-sha>` with the action's full commit SHA (supply-chain pin). Keep the trigger on `pull_request` (fork PRs then get no secrets, by GitHub default). The `comment` subcommand reads the summary markdown and posts via `GITHUB_TOKEN` — optional; skip if you'd rather read logs.
 

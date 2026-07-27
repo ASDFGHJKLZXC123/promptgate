@@ -44,7 +44,7 @@ Principle: **Spark drafts bounded code; Terra carries routine implementation; So
 Hard routing rules:
 
 - **Never use Claude Sonnet 5 below `high` effort.** If a task does not justify `high`, route it to Spark, Luna, or Terra instead.
-- **Do not use a Haiku model anywhere in this project.** Runtime LLM-as-judge uses GPT-5.6 Terra at `high` (locked decision #11).
+- **Do not use a Haiku model anywhere in this project.** The human-approved 2026-07-27 decision #11 amendment makes the Phase 5 runtime judge cross-provider: DeepSeek V4 Flash judges Gemini 2.5 Flash outputs, and Gemini judges DeepSeek outputs.
 - Spark is a fast, less-capable research-preview model: use it only for small, exact, testable edits. If unavailable, route its work to Terra at `medium`.
 - Luna handles clear, repeatable transformations and evidence processing; it does not own a full phase.
 - Use Sol `xhigh` for difficult correctness/review and `high` for frontend or document polish. Reserve `max` for a documented stuck-state escalation.
@@ -69,7 +69,7 @@ Cross-cutting:
 | Checkpoint B technical eval-gate audit | GPT-5.6 Sol / xhigh | Sol checks assertion semantics, exit codes, baseline math, persistence, and meta-test evidence. |
 | Checkpoint B final pathway verdict | Claude Fable 5 / high | Fable judges whether the dataset discriminates and whether the project should proceed, adjust, or redirect. |
 | Synthetic dataset expansion (phase 5, GUIDE §7.3) | Claude Fable 5 / high | Needs diverse adversarial generation across the severity matrix; every label remains human-reviewed. |
-| Runtime LLM-as-judge (in-product) | GPT-5.6 Terra / high | Locked decision #11; deterministic assertions run first, and Terra is invoked only for declared rubric checks. |
+| Phase 5 runtime LLM-as-judge (in-product) | cross-provider Gemini 2.5 Flash ↔ DeepSeek V4 Flash | Amended decision #11; deterministic assertions run first, DeepSeek judges only Gemini output, Gemini judges only DeepSeek output, and neither model judges itself. |
 | Stuck-state implementation escalation | Alternate-provider deep model / xhigh or max | Escalate by failure domain, not a linear vendor tier; see below. |
 
 Stuck-state routing after 3 documented implementation attempts:
@@ -105,13 +105,13 @@ At the end of each phase:
 3. If this phase ends at a pathway checkpoint (after phase 2, after phase 5, or an event trigger — see Pathway reviews), run the assigned Sol/Fable review now and attach its verdict.
 4. Present evidence to the human (commands run, outputs, `requests` rows, screenshots for UI phases, pathway verdict if any) and **wait for explicit approval before starting the next phase.** No exceptions — including phase 0.
 
-The human-approved 2026-07-25 provider amendment permits an explicit **available-key live matrix** in phase verify blocks: every implemented provider whose key is configured must be called; every missing-key activation check must be named as deferred with its reason and must never be described as live-green. Offline parity tests and all non-live acceptance criteria still apply to every approved provider. This exception does not waive the locked OpenAI judge prerequisite in phase 5 or CI requirements in phase 6.
+The human-approved 2026-07-25 provider amendment permits an explicit **available-key live matrix** in phase verify blocks: every implemented provider whose key is configured must be called; every missing-key activation check must be named as deferred with its reason and must never be described as live-green. Offline parity tests and all non-live acceptance criteria still apply to every approved provider. The human-approved 2026-07-27 decision #11 amendment replaces Phase 5's OpenAI judge prerequisite with the exact Gemini/DeepSeek cross-judge matrix; it does not waive CI requirements in phase 6.
 
 ## Blocking conditions — stop and ask, never guess
 
 - **`TODO(verify)` items** (external repos): resolving them needs `Archive/carematch_ai` or `Finished/web_builder_llm`. Ask the human for access or for the answers; record the resolution in `PROGRESS.md`. An unresolved item blocks **only the phase that consumes it** (each is tagged with its phase in `PROGRESS.md`) — earlier phases proceed normally.
 - **`TODO(build-time)` items**: current model names and prices. Propose candidates from the providers' live pricing/docs pages, show them to the human, get confirmation before seeding `pricing.json`.
-- **Secrets**: never generate, hardcode, or commit API keys. Ask the human to place them in `.env` (gitignored). Provider keys are optional at boot; their absence blocks only that provider's bounded live activation check unless a later phase explicitly requires it (notably the locked OpenAI judge in phase 5). If `.env.example` and reality drift, fix `.env.example`.
+- **Secrets**: never generate, hardcode, or commit API keys. Ask the human to place them in `.env` (gitignored). Provider keys are optional at boot; their absence blocks only that provider's bounded live activation check unless a later phase explicitly requires it. Phase 5 explicitly requires both Gemini and DeepSeek for its target/cross-judge matrix; Phase 6 retains its separate four-provider requirement. If `.env.example` and reality drift, fix `.env.example`.
 - **Anything the spec doesn't cover**: if a step forces a choice the guide/playbook doesn't answer (naming, minor library, edge-case behavior), pick the smallest-surprise option, but log it in `PROGRESS.md` → Decision log with one line of rationale. If the choice is architectural (affects schema, API contract, or a locked decision), stop and ask instead.
 
 ## Deviations

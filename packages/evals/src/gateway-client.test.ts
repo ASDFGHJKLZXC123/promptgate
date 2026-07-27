@@ -348,6 +348,28 @@ describe("GatewayClient", () => {
 		});
 	});
 
+	test("serializes both Phase 5 judges at zero temperature without an effort override", async () => {
+		for (const model of ["gemini-2.5-flash", "deepseek-v4-flash"] as const) {
+			const fetcher = vi.fn<FetchLike>().mockResolvedValue(successResponse());
+			await client(fetcher).complete({
+				model,
+				prompt: "judge_rubric_v1@1",
+				vars: { payload: "{}" },
+				responseFormat: { type: "json_object" },
+			});
+			const [, init] = fetcher.mock.calls[0] ?? [];
+			const body = JSON.parse(String(init?.body));
+			expect(body).toMatchObject({
+				model,
+				temperature: 0,
+				response_format: { type: "json_object" },
+				pg_feature: "eval",
+				pg_no_cache: true,
+			});
+			expect(body).not.toHaveProperty("reasoning_effort");
+		}
+	});
+
 	test("rejects runtime judge options outside the fixed eval schema", async () => {
 		const fetcher = vi.fn<FetchLike>().mockResolvedValue(successResponse());
 		await expect(

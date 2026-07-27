@@ -9,7 +9,10 @@ import {
 } from "./assertions.js";
 import { type LoadedDataset, loadDataset } from "./dataset.js";
 import type { GatewayClient, GatewayResponse } from "./gateway-client.js";
-import { createGatewayRubricEvaluator } from "./judge.js";
+import {
+	createGatewayRubricEvaluator,
+	PHASE_5_TARGET_MODELS,
+} from "./judge.js";
 
 export class EvalRunError extends Error {
 	constructor(message: string) {
@@ -162,7 +165,7 @@ async function runModel(
 			return response;
 		},
 	};
-	const rubric = createGatewayRubricEvaluator(meteredGateway);
+	const rubric = createGatewayRubricEvaluator(meteredGateway, model);
 	for (const test of dataset.tests) {
 		const caseStarted = now();
 		active = { cost: 0 };
@@ -223,17 +226,14 @@ export async function runEvaluation(
 	const slug = datasetSlug(options.dataset);
 	if (!dataset.prompts.includes(options.prompt))
 		throw new EvalRunError("Selected prompt is not declared by the dataset.");
-	if (new Set(dataset.providers).size !== dataset.providers.length)
-		throw new EvalRunError("Dataset providers must not contain duplicates.");
-	const targetModels = [
-		"claude-sonnet-5",
-		"gpt-5.6-luna",
-		"gemini-2.5-flash",
-		"deepseek-v4-flash",
-	];
-	if (dataset.providers.some((model) => !targetModels.includes(model)))
+	if (
+		dataset.providers.length !== PHASE_5_TARGET_MODELS.length ||
+		dataset.providers.some(
+			(model, index) => model !== PHASE_5_TARGET_MODELS[index],
+		)
+	)
 		throw new EvalRunError(
-			"Dataset contains an unsupported eval provider model.",
+			"Phase 5 requires Gemini then DeepSeek exactly once as dataset providers.",
 		);
 	const summaries = await deps.admin.promptSummaries();
 	const candidate = freezeRef(options.prompt, summaries);
