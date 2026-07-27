@@ -406,6 +406,7 @@ pg-eval run --dataset safety_screening --prompt safety_screen@candidate \
 ```
 
 - All eval traffic goes **through the gateway itself** (dogfooding: evals get metered and budgeted like any client) with `pg_no_cache: true` — persisted quality measurements must hit live models or drift stays invisible (`--allow-cache` exists for local harness development only and marks the run `trigger: 'manual'`). Judge calls also go through the gateway using **`gpt-5.6-terra` with `reasoning_effort: "high"`** (decision #11) and `response_format: {type: "json_object"}`; rubric prompts live in the registry (`judge_rubric_v1`) like any other prompt. The four-provider amendment does not replace that locked judge: Phase 5 remains blocked until a working OpenAI key exists, unless the human separately amends decision #11. This future prerequisite is not a Phase 1 blocker.
+- Eval requests use `temperature: 0` where the pinned model supports it. The pinned `claude-sonnet-5` path omits `temperature` because its Anthropic translation accepts only the provider default; the locked `gpt-5.6-terra` judge remains at `temperature: 0` (human-approved amendment, 2026-07-26).
 - Label freezing: at run start, every label ref (`@candidate`, `@prod`) is resolved to a concrete version once; all cases in the run use that version, and it's what `eval_runs.prompt_version` records.
 - One `eval_runs` row per model: N models in the dataset = N runs sharing a `git_sha`, each with its own results (matches the schema's `(run_id, case_id)` key).
 - Deterministic assertions run first and short-circuit; the judge only runs on cases that declare `llm-rubric` — decision #11's cost control.
@@ -514,7 +515,7 @@ The phase-by-phase playbook — ordered steps, exact files, commands, key code, 
 | Provider wire-format drift breaks adapters | nightly contract tests (§11); adapters validate with Zod and fail loud, never coerce silently |
 | Streaming metering inaccurate (aborts, missing usage) | `cost_estimated` flag + estimated-vs-exact split visible in dashboard; never silently guess |
 | Pricing table goes stale → wrong costs | date-effective rows; startup warning if newest `effective_from` > 60 days old |
-| CI eval flakiness (LLM nondeterminism) fails good PRs | deterministic assertions dominate the gate; judge cases use threshold + `max-score-drop` band, not exact match; temperature 0 for eval traffic |
+| CI eval flakiness (LLM nondeterminism) fails good PRs | deterministic assertions dominate the gate; judge cases use threshold + `max-score-drop` band, not exact match; temperature 0 where supported, with pinned `claude-sonnet-5` using its required provider-default temperature |
 | CI cost runaway | $1 circuit-breaker gateway budget enforced by reserve-then-reconcile (§3.5); dedicated CI provider keys carry provider-side spend limits as the absolute outer wall |
 | web_builder_llm needs tool calls (adapter gap) | resolve the `TODO(verify)` in phase 2, not phase 8; backup dogfood app named |
 | Scope creep toward SaaS (multi-tenant, orgs, SSO) | scope guard is in the idea file; admin auth stays a single env token by decision #15 |

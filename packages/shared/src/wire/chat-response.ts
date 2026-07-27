@@ -1,6 +1,6 @@
 import { z } from "zod";
-import { FinishReasonSchema } from "./common.js";
-import { ChatMessageSchema } from "./message.js";
+import { FinishReasonSchema } from "./common.ts";
+import { ChatMessageSchema } from "./message.ts";
 
 /**
  * Normalized token usage returned by the approved providers (§3.5 — the

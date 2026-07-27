@@ -89,9 +89,9 @@ describe("pg-eval CLI scaffold", () => {
 		expect(packageJson.bin).toEqual({ "pg-eval": "./src/cli.ts" });
 
 		const result = spawnSync(
-			process.execPath,
-			[resolve(packageRoot, "src/cli.ts"), "--help"],
-			{ encoding: "utf8" },
+			"pnpm",
+			["--filter", "@promptgate/evals", "exec", "pg-eval", "--help"],
+			{ cwd: process.cwd(), encoding: "utf8" },
 		);
 		expect(result.error).toBeUndefined();
 		expect(result.status).toBe(0);

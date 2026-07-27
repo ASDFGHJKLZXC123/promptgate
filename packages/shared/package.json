@@ -12,6 +12,11 @@
 			"types": "./dist/index.d.ts",
 			"development": "./src/index.ts",
 			"default": "./dist/index.js"
+		},
+		"./eval": {
+			"types": "./dist/eval.d.ts",
+			"development": "./src/eval.ts",
+			"default": "./dist/eval.js"
 		}
 	},
 	"scripts": {
@@ -21,6 +26,7 @@
 		"zod": "^4.4.3"
 	},
 	"devDependencies": {
+		"@types/node": "^22.20.1",
 		"vitest": "^4.1.10"
 	}
 }

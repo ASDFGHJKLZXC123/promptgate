@@ -320,7 +320,7 @@ Future prerequisite (not a Phase 1 blocker): decision #11 still locks the live j
    ```
    Order within a case: deterministic ones first, short-circuit on fail, `llm-rubric` last (§7.2 cost control).
 
-4. **Gateway client.** Thin fetch wrapper (base URL + key from flags/env). All calls `temperature: 0`, **`pg_no_cache: true`** (persisted quality runs must hit live models — cached responses conceal provider drift; `--allow-cache` is for local harness development only), `pg_feature: "eval"`.
+4. **Gateway client.** Thin fetch wrapper (base URL + key from flags/env). Eval calls use `temperature: 0` where supported; for pinned `claude-sonnet-5`, omit `temperature` because its Anthropic path rejects non-default temperature (human-approved amendment, 2026-07-26). The locked `gpt-5.6-terra` judge still uses `temperature: 0`. All calls set **`pg_no_cache: true`** (persisted quality runs must hit live models — cached responses conceal provider drift; `--allow-cache` is for local harness development only) and `pg_feature: "eval"`.
 
 5. **Judge.** `llmRubric` calls the gateway with **`model: "gpt-5.6-terra"` and `reasoning_effort: "high"`** plus registry prompt `judge_rubric_v1` (create it via seed script — the rubric prompt is itself versioned, per §7.2), `response_format: {type: "json_object"}`, then parses `{pass, score, rationale}`. The model and effort are locked by decision #11, not silently downgraded for cost. Malformed judge output = infrastructure error (exit 2), not a case failure.
 

@@ -1,7 +1,7 @@
 import { z } from "zod";
-import { ReasoningEffortSchema, ResponseFormatSchema } from "./common.js";
-import { ChatMessageSchema } from "./message.js";
-import { PgExtensionFieldsSchema } from "./pg-extensions.js";
+import { ReasoningEffortSchema, ResponseFormatSchema } from "./common.ts";
+import { ChatMessageSchema } from "./message.ts";
+import { PgExtensionFieldsSchema } from "./pg-extensions.ts";
 
 /**
  * POST /v1/chat/completions request body (IMPLEMENTATION_GUIDE.md §5.1).
