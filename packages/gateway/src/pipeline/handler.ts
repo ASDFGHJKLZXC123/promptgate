@@ -301,12 +301,21 @@ function cacheReplayFrames(hit: CacheHit): Buffer[] {
 		usage: hit.usage,
 	};
 
-	return [completionChunk, usageChunk, "[DONE]"].map((frame) =>
-		Buffer.from(
+	return [completionChunk, usageChunk, "[DONE]"].flatMap((frame) => {
+		const encoded = Buffer.from(
 			frameSseData(typeof frame === "string" ? frame : JSON.stringify(frame)),
 			"utf8",
-		),
-	);
+		);
+		// Do not hand a multi-megabyte cached completion to Node as one stream
+		// chunk. Splitting only the transport buffers preserves the exact SSE
+		// payload while letting Readable apply backpressure between writes, so a
+		// client reset can be observed before the replay is marked complete.
+		const chunks: Buffer[] = [];
+		for (let offset = 0; offset < encoded.length; offset += 16 * 1024) {
+			chunks.push(encoded.subarray(offset, offset + 16 * 1024));
+		}
+		return chunks;
+	});
 }
 
 /** Applies cache-hit accounting and returns the replay without touching an adapter. */
