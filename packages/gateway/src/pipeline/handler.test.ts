@@ -116,17 +116,22 @@ function openTestDb(): Database.Database {
 
 function seedApiKey(
 	db: Database.Database,
-	options: { name?: string; rateLimitRpm?: number } = {},
+	options: {
+		name?: string;
+		rateLimitRpm?: number;
+		budgetMicroUsdMonth?: number;
+	} = {},
 ): number {
 	const row = db
 		.prepare(
-			`INSERT INTO api_keys (name, key_hash, rate_limit_rpm, disabled)
-			 VALUES (@name, @key_hash, @rate_limit_rpm, 0)
+			`INSERT INTO api_keys (name, key_hash, budget_micro_usd_month, rate_limit_rpm, disabled)
+			 VALUES (@name, @key_hash, @budget_micro_usd_month, @rate_limit_rpm, 0)
 			 RETURNING id`,
 		)
 		.get({
 			name: options.name ?? "handler-test-key",
 			key_hash: KEY_HASH,
+			budget_micro_usd_month: options.budgetMicroUsdMonth ?? 10_000_000,
 			rate_limit_rpm: options.rateLimitRpm ?? 60,
 		}) as { id: number };
 	return row.id;
@@ -1412,6 +1417,354 @@ describe("POST /v1/chat/completions — rate limiting", () => {
 			expect((await request()).statusCode).toBe(200);
 			expect((await request()).statusCode).toBe(429);
 			expect(calls).toHaveLength(3);
+		} finally {
+			await server.close();
+			db.close();
+		}
+	});
+});
+
+describe("POST /v1/chat/completions — budget circuit breaker", () => {
+	test("returns the exact over-budget envelope before cache or provider work and logs rejection", async () => {
+		const db = openTestDb();
+		const keyId = seedApiKey(db, { budgetMicroUsdMonth: 1 });
+		seedPricing(db, "gpt-budget-reject", 1_000_000, 1_000_000);
+		const { adapter, calls } = fakeAdapter(async () => fakeChatResponse());
+		const server = await buildTestServer({ openai: adapter });
+
+		try {
+			const response = await server.inject({
+				method: "POST",
+				url: "/v1/chat/completions",
+				headers: authHeaders(),
+				body: JSON.stringify({
+					model: "gpt-budget-reject",
+					messages: [{ role: "user", content: "abcd" }],
+					max_tokens: 1,
+				}),
+			});
+			expect(response.statusCode).toBe(429);
+			expect(response.json()).toEqual({
+				error: {
+					message: "Budget exceeded.",
+					type: "insufficient_quota",
+					code: "budget_exceeded",
+				},
+			});
+			expect(calls).toHaveLength(0);
+			expect(
+				db
+					.prepare(
+						"SELECT api_key_id, status, error_code FROM requests ORDER BY id DESC LIMIT 1",
+					)
+					.get(),
+			).toEqual({
+				api_key_id: keyId,
+				status: "rejected_budget",
+				error_code: "budget_exceeded",
+			});
+		} finally {
+			await server.close();
+			db.close();
+		}
+	});
+
+	test("admits exactly the reservation-affordable count across ten concurrent calls", async () => {
+		const db = openTestDb();
+		seedApiKey(db, { budgetMicroUsdMonth: 4 });
+		seedPricing(db, "gpt-budget-burst", 1_000_000, 1_000_000);
+		let release: (() => void) | undefined;
+		const pending = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		const { adapter, calls } = fakeAdapter(async () => {
+			await pending;
+			return fakeChatResponse({ model: "gpt-budget-burst" });
+		});
+		const server = await buildTestServer({ openai: adapter });
+
+		try {
+			const requests = Array.from({ length: 10 }, () =>
+				server.inject({
+					method: "POST",
+					url: "/v1/chat/completions",
+					headers: authHeaders(),
+					body: JSON.stringify({
+						model: "gpt-budget-burst",
+						messages: [{ role: "user", content: "abcd" }],
+						max_tokens: 1,
+						pg_no_cache: true,
+					}),
+				}),
+			);
+			await vi.waitFor(() => expect(calls).toHaveLength(2));
+			release?.();
+			const responses = await Promise.all(requests);
+			expect(
+				responses.filter((response) => response.statusCode === 200),
+			).toHaveLength(2);
+			expect(
+				responses.filter((response) => response.statusCode === 429),
+			).toHaveLength(8);
+			expect(calls).toHaveLength(2);
+		} finally {
+			await server.close();
+			db.close();
+		}
+	});
+
+	test("keeps a cache-hit reservation until durable logging and retains debt when logging fails", async () => {
+		const db = openTestDb();
+		seedApiKey(db, { budgetMicroUsdMonth: 2 });
+		seedPricing(db, "gpt-budget-cache", 1_000_000, 1_000_000);
+		const body: ChatRequest = {
+			model: "gpt-budget-cache",
+			messages: [{ role: "user", content: "abcd" }],
+			max_tokens: 1,
+		};
+		seedCacheEntry(db, body, fakeChatResponse({ model: "gpt-budget-cache" }));
+		db.exec(
+			"CREATE TRIGGER fail_budget_log BEFORE INSERT ON requests BEGIN SELECT RAISE(ABORT, 'budget log failure'); END",
+		);
+		const { adapter, calls } = fakeAdapter(async () => fakeChatResponse());
+		const server = await buildTestServer({ openai: adapter });
+
+		try {
+			const first = await server.inject({
+				method: "POST",
+				url: "/v1/chat/completions",
+				headers: authHeaders(),
+				body: JSON.stringify(body),
+			});
+			expect(first.statusCode).toBe(200);
+			expect(first.headers["x-pg-cache"]).toBe("hit");
+
+			const second = await server.inject({
+				method: "POST",
+				url: "/v1/chat/completions",
+				headers: authHeaders(),
+				body: JSON.stringify(body),
+			});
+			expect(second.statusCode).toBe(429);
+			expect(calls).toHaveLength(0);
+		} finally {
+			await server.close();
+			db.close();
+		}
+	});
+
+	test("releases a normal cache-hit reservation after its zero-cost audit row is durable", async () => {
+		const db = openTestDb();
+		seedApiKey(db, { budgetMicroUsdMonth: 2 });
+		seedPricing(db, "gpt-budget-cache-release", 1_000_000, 1_000_000);
+		const body: ChatRequest = {
+			model: "gpt-budget-cache-release",
+			messages: [{ role: "user", content: "abcd" }],
+			max_tokens: 1,
+		};
+		seedCacheEntry(
+			db,
+			body,
+			fakeChatResponse({ model: "gpt-budget-cache-release" }),
+		);
+		const { adapter, calls } = fakeAdapter(async () => fakeChatResponse());
+		const server = await buildTestServer({ openai: adapter });
+
+		try {
+			for (let index = 0; index < 2; index += 1) {
+				const response = await server.inject({
+					method: "POST",
+					url: "/v1/chat/completions",
+					headers: authHeaders(),
+					body: JSON.stringify(body),
+				});
+				expect(response.statusCode).toBe(200);
+				expect(response.headers["x-pg-cache"]).toBe("hit");
+			}
+			expect(calls).toHaveLength(0);
+		} finally {
+			await server.close();
+			db.close();
+		}
+	});
+
+	test("releases a provider-error reservation after its audit row is durable", async () => {
+		const db = openTestDb();
+		seedApiKey(db, { budgetMicroUsdMonth: 2 });
+		seedPricing(db, "gpt-budget-provider-error", 1_000_000, 1_000_000);
+		const { adapter, calls } = fakeAdapter(async () => {
+			throw new Error("offline fake provider failure");
+		});
+		const server = await buildTestServer({ openai: adapter });
+
+		try {
+			for (let index = 0; index < 2; index += 1) {
+				const response = await server.inject({
+					method: "POST",
+					url: "/v1/chat/completions",
+					headers: authHeaders(),
+					body: JSON.stringify({
+						model: "gpt-budget-provider-error",
+						messages: [{ role: "user", content: "abcd" }],
+						max_tokens: 1,
+						pg_no_cache: true,
+					}),
+				});
+				expect(response.statusCode).toBe(502);
+			}
+			expect(calls).toHaveLength(2);
+		} finally {
+			await server.close();
+			db.close();
+		}
+	});
+
+	test("re-reads a durable actual cost larger than its reservation after reconciliation", async () => {
+		const db = openTestDb();
+		seedApiKey(db, { budgetMicroUsdMonth: 6 });
+		seedPricing(db, "gpt-budget-larger-actual", 1_000_000, 1_000_000);
+		const { adapter, calls } = fakeAdapter(async () =>
+			fakeChatResponse({
+				model: "gpt-budget-larger-actual",
+				usage: { prompt_tokens: 3, completion_tokens: 3, total_tokens: 6 },
+			}),
+		);
+		const server = await buildTestServer({ openai: adapter });
+		const body = {
+			model: "gpt-budget-larger-actual",
+			messages: [{ role: "user", content: "abcd" }],
+			max_tokens: 1,
+		};
+
+		try {
+			expect(
+				(
+					await server.inject({
+						method: "POST",
+						url: "/v1/chat/completions",
+						headers: authHeaders(),
+						body: JSON.stringify(body),
+					})
+				).statusCode,
+			).toBe(200);
+			// Reservation was 2, while the durable provider usage cost is 6.
+			expect(
+				(
+					await server.inject({
+						method: "POST",
+						url: "/v1/chat/completions",
+						headers: authHeaders(),
+						body: JSON.stringify(body),
+					})
+				).statusCode,
+			).toBe(429);
+			expect(calls).toHaveLength(1);
+		} finally {
+			await server.close();
+			db.close();
+		}
+	});
+
+	test("retains the larger actual cost as debt when the durable insert fails", async () => {
+		const db = openTestDb();
+		seedApiKey(db, { budgetMicroUsdMonth: 6 });
+		seedPricing(db, "gpt-budget-failed-larger-actual", 1_000_000, 1_000_000);
+		const { adapter, calls } = fakeAdapter(async () =>
+			fakeChatResponse({
+				model: "gpt-budget-failed-larger-actual",
+				usage: { prompt_tokens: 3, completion_tokens: 3, total_tokens: 6 },
+			}),
+		);
+		db.exec(
+			"CREATE TRIGGER fail_larger_actual_log BEFORE INSERT ON requests BEGIN SELECT RAISE(ABORT, 'budget log failure'); END",
+		);
+		const server = await buildTestServer({ openai: adapter });
+		const body = {
+			model: "gpt-budget-failed-larger-actual",
+			messages: [{ role: "user", content: "abcd" }],
+			max_tokens: 1,
+			pg_no_cache: true,
+		};
+
+		try {
+			expect(
+				(
+					await server.inject({
+						method: "POST",
+						url: "/v1/chat/completions",
+						headers: authHeaders(),
+						body: JSON.stringify(body),
+					})
+				).statusCode,
+			).toBe(200);
+			expect(
+				(
+					await server.inject({
+						method: "POST",
+						url: "/v1/chat/completions",
+						headers: authHeaders(),
+						body: JSON.stringify(body),
+					})
+				).statusCode,
+			).toBe(429);
+			expect(calls).toHaveLength(1);
+		} finally {
+			await server.close();
+			db.close();
+		}
+	});
+
+	test("admin PATCH invalidates stale settled spend while active reservations still count", async () => {
+		const db = openTestDb();
+		const keyId = seedApiKey(db, { budgetMicroUsdMonth: 4 });
+		seedPricing(db, "gpt-budget-patch", 1_000_000, 1_000_000);
+		let release: (() => void) | undefined;
+		const pending = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		const { adapter, calls } = fakeAdapter(async () => {
+			await pending;
+			return fakeChatResponse({ model: "gpt-budget-patch" });
+		});
+		const server = await buildTestServer({ openai: adapter });
+		const request = () =>
+			server.inject({
+				method: "POST",
+				url: "/v1/chat/completions",
+				headers: authHeaders(),
+				body: JSON.stringify({
+					model: "gpt-budget-patch",
+					messages: [{ role: "user", content: "abcd" }],
+					max_tokens: 1,
+					pg_no_cache: true,
+				}),
+			});
+
+		try {
+			const first = request();
+			await vi.waitFor(() => expect(calls).toHaveLength(1));
+			// The first admission memoized zero settled spend. A direct write here
+			// simulates another durable row appearing before the admin PATCH; only
+			// PATCH invalidation makes the second admission see this new spend.
+			db.prepare(
+				`INSERT INTO requests (
+					request_id, api_key_id, provider, model, cache_hit, streamed,
+					cost_micro_usd, cost_estimated, total_ms, status
+				) VALUES (?, ?, 'openai', 'gpt-budget-patch', 0, 0, 2, 0, 0, 'ok')`,
+			).run("10000000-0000-4000-8000-000000000001", keyId);
+			const patch = await server.inject({
+				method: "PATCH",
+				url: `/admin/api/keys/${keyId}`,
+				headers: {
+					"x-admin-token": ADMIN_TOKEN,
+					"content-type": "application/json",
+				},
+				body: JSON.stringify({ budget_micro_usd_month: 4 }),
+			});
+			expect(patch.statusCode).toBe(200);
+			expect((await request()).statusCode).toBe(429);
+			release?.();
+			expect((await first).statusCode).toBe(200);
 		} finally {
 			await server.close();
 			db.close();

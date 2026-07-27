@@ -7,6 +7,8 @@ import { config } from "./config.js";
 import { openDatabase } from "./db/index.js";
 import { migrate } from "./db/migrate.js";
 import { registerClientAuth } from "./pipeline/auth.js";
+import { sumCurrentMonthSettledSpend } from "./pipeline/budget.dao.js";
+import { BudgetGuard, type BudgetMemoClock } from "./pipeline/budget.js";
 import { deleteExpiredCacheEntries } from "./pipeline/cache.dao.js";
 import {
 	type Clock,
@@ -41,6 +43,8 @@ export interface BuildServerOptions {
 	 * share `now`, whose scripted values drive request-latency assertions.
 	 */
 	rateLimitNow?: RateLimitClock;
+	/** Separate monotonic clock for the short-lived settled-spend memo. */
+	budgetNow?: BudgetMemoClock;
 }
 
 export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
@@ -74,6 +78,10 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
 		deepseek: createDeepSeekAdapter({ apiKey: config.DEEPSEEK_API_KEY }),
 	};
 	const rateLimiter = new RateLimiter(options.rateLimitNow);
+	const budgetGuard = new BudgetGuard({
+		settledSpend: (keyId) => sumCurrentMonthSettledSpend(db, keyId),
+		now: options.budgetNow,
+	});
 
 	const server = fastify();
 
@@ -83,7 +91,7 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
 
 	server.register(
 		(adminServer) => {
-			registerAdminRoutes(adminServer, db);
+			registerAdminRoutes(adminServer, db, budgetGuard);
 		},
 		{ prefix: "/admin" },
 	);
@@ -101,6 +109,7 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
 				adapters,
 				options.now,
 				rateLimiter,
+				budgetGuard,
 			);
 			registerModelsRoute(v1Server, db);
 			registerRequestUsageRoute(v1Server, db);

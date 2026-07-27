@@ -5,6 +5,7 @@ import { z } from "zod";
 
 import { config } from "../config.js";
 import { sendError } from "../errors.js";
+import type { BudgetGuard } from "../pipeline/budget.js";
 import {
 	type ApiKeyPatchInput,
 	type ApiKeyWithSpend,
@@ -86,6 +87,7 @@ function isUniqueConstraintError(error: unknown): boolean {
 export function registerAdminRoutes(
 	server: FastifyInstance,
 	db: Database.Database,
+	budgetGuard: BudgetGuard,
 ): void {
 	server.setErrorHandler((error, request, reply) => {
 		const candidateStatus =
@@ -200,6 +202,10 @@ export function registerAdminRoutes(
 			sendError(reply, 404, "API key not found.", "not_found");
 			return reply;
 		}
+		// A successful PATCH can change the budget while requests are still
+		// reserved. Clear only the settled SQLite memo; reservations and
+		// fail-closed debt must remain counted (§3.5).
+		budgetGuard.invalidate(row.id);
 
 		const response: StoredApiKey = {
 			id: row.id,

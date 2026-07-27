@@ -18,6 +18,7 @@ import type {
 import { config } from "../config.js";
 import { sendError } from "../errors.js";
 import { readStreamChunk } from "../providers/openai-compatible-stream.js";
+import { findCurrentPricing } from "../providers/pricing.dao.js";
 import {
 	ProviderConfigError,
 	ProviderError,
@@ -30,6 +31,11 @@ import type {
 	ProviderName,
 	SseChunk,
 } from "../providers/types.js";
+import {
+	type BudgetGuard,
+	type BudgetReservation,
+	estimateBudgetReservation,
+} from "./budget.js";
 import {
 	type CacheHit,
 	findAndRecordCacheHit,
@@ -73,6 +79,7 @@ interface PendingRequestLog {
 	errorCode?: string | null;
 	startedAtMs: number;
 	loggingStarted: boolean;
+	budgetReservation?: BudgetReservation;
 }
 
 declare module "fastify" {
@@ -138,6 +145,7 @@ async function logRequest(
 	db: Database.Database,
 	request: FastifyRequest,
 	now: Clock,
+	budgetGuard: BudgetGuard,
 ): Promise<void> {
 	const log = request.pgRequestLog;
 	if (!log || log.loggingStarted) {
@@ -178,6 +186,20 @@ async function logRequest(
 		request.log.error(
 			{ failureType, requestId: log.requestId },
 			"Failed to persist requests row",
+		);
+		if (log.budgetReservation) {
+			budgetGuard.retainDebt(log.budgetReservation, log.costMicroUsd ?? 0);
+		}
+		return;
+	}
+
+	// A durable insert is the only condition that releases a reservation. Keep
+	// this outside the insert catch so a future finalization bug cannot be
+	// mistaken for a failed write and reopen capacity through debt accounting.
+	if (log.budgetReservation) {
+		budgetGuard.reconcileAfterDurableLog(
+			log.budgetReservation,
+			log.costMicroUsd ?? 0,
 		);
 	}
 }
@@ -365,6 +387,7 @@ async function* streamFrames(
 	firstResult: IteratorResult<SseChunk>,
 	timeout: ReturnType<typeof setTimeout>,
 	now: Clock,
+	budgetGuard: BudgetGuard,
 	wasClientAborted: () => boolean,
 	cleanup: () => void,
 ): AsyncGenerator<Buffer> {
@@ -485,7 +508,7 @@ async function* streamFrames(
 			// Fastify does not guarantee onResponse after a client has reset the
 			// response socket. Preserve the audit row without blocking the closed
 			// connection; normal paths remain onResponse-only.
-			void logRequest(db, request, now);
+			void logRequest(db, request, now, budgetGuard);
 		}
 	}
 }
@@ -507,6 +530,7 @@ async function handleStreamingRequest(
 	provider: ProviderName,
 	adapter: ProviderAdapter,
 	now: Clock,
+	budgetGuard: BudgetGuard,
 ): Promise<FastifyReply> {
 	const controller = new AbortController();
 	let clientAborted = false;
@@ -564,7 +588,7 @@ async function handleStreamingRequest(
 			applyStreamMeter(db, log, body, undefined, 0);
 			log.status = "client_aborted";
 			log.errorCode = null;
-			void logRequest(db, request, now);
+			void logRequest(db, request, now, budgetGuard);
 			return reply;
 		}
 		return sendStreamStartError(reply, log, provider, error, controller.signal);
@@ -584,7 +608,7 @@ async function handleStreamingRequest(
 		applyStreamMeter(db, log, body, undefined, 0);
 		log.status = "client_aborted";
 		log.errorCode = null;
-		void logRequest(db, request, now);
+		void logRequest(db, request, now, budgetGuard);
 		return reply;
 	}
 
@@ -606,6 +630,7 @@ async function handleStreamingRequest(
 				firstResult,
 				timeout,
 				now,
+				budgetGuard,
 				() => clientAborted,
 				cleanup,
 			),
@@ -667,6 +692,7 @@ export function registerChatCompletionsRoute(
 	adapters: ProviderAdapterRegistry,
 	now: Clock = defaultClock,
 	rateLimiter = new RateLimiter(),
+	budgetGuard: BudgetGuard,
 ): void {
 	server.decorateRequest("pgRequestLog");
 	server.post(
@@ -695,7 +721,7 @@ export function registerChatCompletionsRoute(
 			},
 			errorHandler: sendRouteError,
 			onResponse: async (request) => {
-				await logRequest(db, request, now);
+				await logRequest(db, request, now, budgetGuard);
 			},
 		},
 		async (request, reply) => {
@@ -722,6 +748,42 @@ export function registerChatCompletionsRoute(
 				return reply.code(routing.statusCode).send(routing.error);
 			}
 			log.provider = routing.provider;
+			const pricing = findCurrentPricing(db, body.model);
+			if (!pricing) {
+				// resolveProvider performed this lookup immediately above; retain a
+				// fail-closed guard in case pricing is changed between the steps.
+				log.status = "rejected_unknown_model";
+				log.errorCode = "unknown_model";
+				return sendError(
+					reply,
+					400,
+					`Unknown model: "${body.model}".`,
+					"unknown_model",
+				);
+			}
+
+			const estimate = estimateBudgetReservation(
+				body,
+				pricing,
+				config.DEFAULT_MAX_TOKENS,
+			);
+			const reservation = budgetGuard.reserve(
+				request.ctx.apiKey.id,
+				request.ctx.apiKey.budgetMicroUsdMonth,
+				estimate,
+			);
+			if (reservation === "over_budget") {
+				log.status = "rejected_budget";
+				log.errorCode = "budget_exceeded";
+				return sendError(
+					reply,
+					429,
+					"Budget exceeded.",
+					"budget_exceeded",
+					"insufficient_quota",
+				);
+			}
+			log.budgetReservation = reservation;
 
 			// Exact-match cache reads belong after route/pricing resolution (and, in
 			// phase 4, after prompt resolution) but before adapter availability or any
@@ -761,6 +823,7 @@ export function registerChatCompletionsRoute(
 					routing.provider,
 					adapter,
 					now,
+					budgetGuard,
 				);
 			}
 
