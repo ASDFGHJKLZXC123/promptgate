@@ -10,6 +10,12 @@ import type { ProviderName } from "../providers/types.js";
  * invariant by rejecting an absent/non-UUID id before any SQL runs.
  */
 const RequestIdSchema = z.uuid();
+const PromptAttributionSchema = z
+	.object({
+		promptId: z.number().int().positive(),
+		promptVersion: z.number().int().positive(),
+	})
+	.nullable();
 
 export type RequestLogProvider = ProviderName | "unknown";
 export type RequestLogStatus =
@@ -23,6 +29,8 @@ export interface InsertRequestLogInput {
 	apiKeyId: number;
 	provider: RequestLogProvider;
 	model: string;
+	promptId?: number | null;
+	promptVersion?: number | null;
 	feature?: string | null;
 	cacheHit: boolean;
 	streamed: boolean;
@@ -115,15 +123,20 @@ export function insertRequestLog(
 	input: InsertRequestLogInput,
 ): void {
 	const requestId = RequestIdSchema.parse(input.requestId);
+	const promptAttribution = PromptAttributionSchema.parse(
+		input.promptId == null && input.promptVersion == null
+			? null
+			: { promptId: input.promptId, promptVersion: input.promptVersion },
+	);
 
 	db.prepare(`
 		INSERT INTO requests (
-			request_id, api_key_id, provider, model, feature,
+			request_id, api_key_id, provider, model, prompt_id, prompt_version, feature,
 			cache_hit, streamed, input_tokens, output_tokens,
 			cost_micro_usd, cost_estimated, first_token_ms, total_ms,
 			status, error_code
 		) VALUES (
-			@request_id, @api_key_id, @provider, @model, @feature,
+			@request_id, @api_key_id, @provider, @model, @prompt_id, @prompt_version, @feature,
 			@cache_hit, @streamed, @input_tokens, @output_tokens,
 			@cost_micro_usd, @cost_estimated, @first_token_ms, @total_ms,
 			@status, @error_code
@@ -133,6 +146,8 @@ export function insertRequestLog(
 		api_key_id: input.apiKeyId,
 		provider: input.provider,
 		model: input.model,
+		prompt_id: promptAttribution?.promptId ?? null,
+		prompt_version: promptAttribution?.promptVersion ?? null,
 		feature: input.feature ?? null,
 		cache_hit: input.cacheHit ? 1 : 0,
 		streamed: input.streamed ? 1 : 0,

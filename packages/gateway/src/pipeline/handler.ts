@@ -7,6 +7,9 @@ import {
 	type ChatResponse,
 	type ChatUsage,
 	PgFeatureSchema,
+	PgPromptRefSchema,
+	PgVarsSchema,
+	stripPgFields,
 } from "@promptgate/shared";
 import type Database from "better-sqlite3";
 import type {
@@ -45,6 +48,7 @@ import {
 } from "./cache.dao.js";
 import { cacheKeyOf } from "./cache-key.js";
 import { meterAbortedStream, meterStreamUsage, meterUsage } from "./meter.js";
+import { resolvePromptRequest } from "./prompt-resolve.js";
 import { RateLimiter } from "./ratelimit.js";
 import {
 	insertRequestLog,
@@ -69,6 +73,8 @@ interface PendingRequestLog {
 	apiKeyId: number;
 	provider: RequestLogProvider;
 	model: string;
+	promptId?: number | null;
+	promptVersion?: number | null;
 	feature?: string | null;
 	cacheHit: boolean;
 	streamed: boolean;
@@ -104,6 +110,8 @@ const HeaderNoCacheSchema = z.enum(["true", "false"]);
 interface EffectiveRequestExtensions {
 	feature: string | null;
 	noCache: boolean;
+	prompt?: string;
+	vars?: Record<string, unknown>;
 }
 
 type HeaderFallbackResolution =
@@ -111,7 +119,7 @@ type HeaderFallbackResolution =
 	| { ok: false; message: string };
 
 /**
- * Resolves the Phase 3 body/header extension boundary. Body fields always win,
+ * Resolves the Phase 4 body/header extension boundary. Body fields always win,
  * including an explicit `pg_no_cache: false`; header values are parsed only as
  * narrow, exact strings so a proxy/client cannot accidentally coerce a value.
  */
@@ -147,7 +155,40 @@ function resolveHeaderFallbacks(
 		}
 	}
 
-	return { ok: true, extensions: { feature, noCache } };
+	let prompt = body.pg_prompt;
+	if (prompt === undefined) {
+		const headerPrompt = request.headers["x-pg-prompt"];
+		if (headerPrompt !== undefined) {
+			const parsedPrompt = PgPromptRefSchema.safeParse(headerPrompt);
+			if (!parsedPrompt.success) {
+				return { ok: false, message: "Invalid x-pg-prompt header." };
+			}
+			prompt = parsedPrompt.data;
+		}
+	}
+
+	let vars = body.pg_vars;
+	if (vars === undefined) {
+		const headerVars = request.headers["x-pg-vars"];
+		if (headerVars !== undefined) {
+			if (typeof headerVars !== "string") {
+				return { ok: false, message: "Invalid x-pg-vars header." };
+			}
+			let decoded: unknown;
+			try {
+				decoded = JSON.parse(headerVars);
+			} catch {
+				return { ok: false, message: "Invalid x-pg-vars header." };
+			}
+			const parsedVars = PgVarsSchema.safeParse(decoded);
+			if (!parsedVars.success) {
+				return { ok: false, message: "Invalid x-pg-vars header." };
+			}
+			vars = parsedVars.data;
+		}
+	}
+
+	return { ok: true, extensions: { feature, noCache, prompt, vars } };
 }
 
 /** Adds header fallbacks to the existing body shape before adapter/cache work. */
@@ -162,6 +203,12 @@ function withEffectiveExtensions(
 			: {}),
 		...(body.pg_no_cache === undefined && extensions.noCache
 			? { pg_no_cache: true }
+			: {}),
+		...(body.pg_prompt === undefined && extensions.prompt !== undefined
+			? { pg_prompt: extensions.prompt }
+			: {}),
+		...(body.pg_vars === undefined && extensions.vars !== undefined
+			? { pg_vars: extensions.vars }
 			: {}),
 	};
 }
@@ -237,6 +284,8 @@ async function logRequest(
 			apiKeyId: log.apiKeyId,
 			provider: log.provider,
 			model: log.model,
+			promptId: log.promptId,
+			promptVersion: log.promptVersion,
 			feature: log.feature,
 			cacheHit: log.cacheHit,
 			streamed: log.streamed,
@@ -624,6 +673,7 @@ async function handleStreamingRequest(
 	reply: FastifyReply,
 	log: PendingRequestLog,
 	body: ChatRequest,
+	forwardedBody: ChatRequest,
 	provider: ProviderName,
 	adapter: ProviderAdapter,
 	now: Clock,
@@ -666,7 +716,9 @@ async function handleStreamingRequest(
 	let iterator: AsyncIterator<SseChunk> | undefined;
 	let firstResult: IteratorResult<SseChunk>;
 	try {
-		iterator = adapter.stream(body, controller.signal)[Symbol.asyncIterator]();
+		iterator = adapter
+			.stream(forwardedBody, controller.signal)
+			[Symbol.asyncIterator]();
 		firstResult = await iterator.next();
 	} catch (error) {
 		clearTimeout(timeout);
@@ -777,10 +829,10 @@ function sendRouteError(
 
 /**
  * Registers `POST /v1/chat/completions` (BUILD_PLAYBOOK.md phase 1 step 7)
- * as an explicit, testable chain. Its fixed Phase 3 order is:
+ * as an explicit, testable chain. Its fixed Phase 4 order is:
  *
  * auth → request-log init → rate limit → validate → resolve provider + pricing
- * → [promptResolve: phase 4] → budget reserve → cache read → adapter → meter
+ * → promptResolve → budget reserve → cache read → adapter → meter
  * → cache write → durable log + budget reconcile.
  *
  * Auth runs on the enclosing `/v1` plugin (`auth.ts`); this route's
@@ -849,21 +901,21 @@ export function registerChatCompletionsRoute(
 					"invalid_request_error",
 				);
 			}
-			const body = withEffectiveExtensions(
+			const requestedBody = withEffectiveExtensions(
 				parsed.data,
 				headerFallbacks.extensions,
 			);
-			log.model = body.model;
+			log.model = requestedBody.model;
 			log.feature = headerFallbacks.extensions.feature;
 
-			const routing = resolveProvider(db, body.model);
+			const routing = resolveProvider(db, requestedBody.model);
 			if (!routing.ok) {
 				log.status = "rejected_unknown_model";
 				log.errorCode = "unknown_model";
 				return reply.code(routing.statusCode).send(routing.error);
 			}
 			log.provider = routing.provider;
-			const pricing = findCurrentPricing(db, body.model);
+			const pricing = findCurrentPricing(db, requestedBody.model);
 			if (!pricing) {
 				// resolveProvider performed this lookup immediately above; retain a
 				// fail-closed guard in case pricing is changed between the steps.
@@ -872,14 +924,38 @@ export function registerChatCompletionsRoute(
 				return sendError(
 					reply,
 					400,
-					`Unknown model: "${body.model}".`,
+					`Unknown model: "${requestedBody.model}".`,
 					"unknown_model",
 				);
 			}
 
-			// Phase 4 insertion point: prompt resolution will replace `body` with
-			// rendered messages here. Phase 3 deliberately performs no prompt DAO
-			// lookup or template work, while keeping the budget/cache boundary fixed.
+			const promptResolution = resolvePromptRequest(db, requestedBody);
+			if (promptResolution.promptRef) {
+				log.promptId = promptResolution.promptRef.promptId;
+				log.promptVersion = promptResolution.promptRef.promptVersion;
+			}
+			if (!promptResolution.ok) {
+				log.status =
+					promptResolution.code === "provider_error"
+						? "provider_error"
+						: "rejected_prompt";
+				log.errorCode = promptResolution.code;
+				return sendError(
+					reply,
+					promptResolution.code === "prompt_not_found"
+						? 404
+						: promptResolution.code === "provider_error"
+							? 500
+							: 400,
+					promptResolution.message,
+					promptResolution.code,
+					promptResolution.code === "provider_error"
+						? "server_error"
+						: "invalid_request_error",
+				);
+			}
+			const body = promptResolution.body;
+
 			const estimate = estimateBudgetReservation(
 				body,
 				pricing,
@@ -941,12 +1017,14 @@ export function registerChatCompletionsRoute(
 			}
 
 			if (body.stream === true) {
+				const forwardedBody = stripPgFields(body) as ChatRequest;
 				return await handleStreamingRequest(
 					db,
 					request,
 					reply,
 					log,
 					body,
+					forwardedBody,
 					routing.provider,
 					adapter,
 					now,
@@ -961,7 +1039,10 @@ export function registerChatCompletionsRoute(
 
 			let response: ChatResponse;
 			try {
-				response = await adapter.complete(body, controller.signal);
+				response = await adapter.complete(
+					stripPgFields(body) as ChatRequest,
+					controller.signal,
+				);
 			} catch (error) {
 				if (controller.signal.aborted) {
 					log.status = "provider_error";

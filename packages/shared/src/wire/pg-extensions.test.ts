@@ -23,6 +23,26 @@ describe("pg_* extension field schemas", () => {
 		expect(result.success).toBe(true);
 	});
 
+	test("PgVarsSchema preserves an own __proto__ key parsed from JSON", () => {
+		const input: unknown = JSON.parse('{"__proto__":"value"}');
+		const result = PgVarsSchema.safeParse(input);
+		expect(result.success).toBe(true);
+		if (result.success) {
+			expect(Object.hasOwn(result.data, "__proto__")).toBe(true);
+			expect(
+				Object.getOwnPropertyDescriptor(result.data, "__proto__")?.value,
+			).toBe("value");
+		}
+	});
+
+	test("PgVarsSchema rejects arrays, null, instances, and symbol keys", () => {
+		expect(PgVarsSchema.safeParse([]).success).toBe(false);
+		expect(PgVarsSchema.safeParse(null).success).toBe(false);
+		expect(PgVarsSchema.safeParse(new Date()).success).toBe(false);
+		const withSymbol = { note: "hello", [Symbol("secret")]: "nope" };
+		expect(PgVarsSchema.safeParse(withSymbol).success).toBe(false);
+	});
+
 	test("PgFeatureSchema rejects an empty string", () => {
 		expect(PgFeatureSchema.safeParse("").success).toBe(false);
 	});

@@ -66,6 +66,22 @@ test("inserts a row and persists the exact request_id", () => {
 	expect(row.request_id).toBe("11111111-1111-4111-8111-111111111111");
 });
 
+test("persists a complete prompt attribution pair", () => {
+	insertRequestLog(db, baseInput({ promptId: 7, promptVersion: 3 }));
+
+	expect(
+		db.prepare("SELECT prompt_id, prompt_version FROM requests").get(),
+	).toEqual({ prompt_id: 7, prompt_version: 3 });
+});
+
+test("rejects a partial or invalid prompt attribution before touching SQL", () => {
+	expect(() => insertRequestLog(db, baseInput({ promptId: 7 }))).toThrow();
+	expect(() =>
+		insertRequestLog(db, baseInput({ promptId: 0, promptVersion: 1 })),
+	).toThrow();
+	expect(countRows()).toBe(0);
+});
+
 test("rejects a missing request_id before touching SQL", () => {
 	expect(() =>
 		insertRequestLog(db, {

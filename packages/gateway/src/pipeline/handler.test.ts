@@ -21,6 +21,8 @@ interface RequestsRow {
 	api_key_id: number;
 	provider: string;
 	model: string;
+	prompt_id: number | null;
+	prompt_version: number | null;
 	feature: string | null;
 	cache_hit: number;
 	streamed: number;
@@ -67,6 +69,299 @@ beforeEach(async () => {
 			throw new Error("network should not be used in handler tests");
 		}),
 	);
+});
+
+describe("POST /v1/chat/completions — Phase 4 prompt resolution", () => {
+	test("uses header fallbacks, body precedence, prepends templates, strips pg fields, and logs exact attribution", async () => {
+		const db = openTestDb();
+		seedApiKey(db);
+		seedPricing(db, "gpt-prompt-headers", 1_000_000, 1_000_000);
+		const promptId = seedRegistryPrompt(
+			db,
+			"headers",
+			[
+				{
+					messages: [{ role: "system", content: "v1 {{name}}" }],
+					variables: [{ name: "name", required: true }],
+				},
+				{
+					messages: [{ role: "system", content: "v2 {{name}}" }],
+					variables: [{ name: "name", required: true }],
+				},
+			],
+			{ name: "prod", version: 2 },
+		);
+		const { adapter, calls } = fakeAdapter(async (body) =>
+			fakeChatResponse({ model: body.model }),
+		);
+		const server = await buildTestServer({ openai: adapter });
+
+		try {
+			const headerResponse = await server.inject({
+				method: "POST",
+				url: "/v1/chat/completions",
+				headers: {
+					...authHeaders(),
+					"x-pg-prompt": "headers@prod",
+					"x-pg-vars": JSON.stringify({ name: "Header" }),
+				},
+				body: JSON.stringify({
+					model: "gpt-prompt-headers",
+					messages: [{ role: "user", content: "client" }],
+					pg_no_cache: true,
+				}),
+			});
+			expect(headerResponse.statusCode).toBe(200);
+			expect(calls[0]?.messages).toEqual([
+				{ role: "system", content: "v2 Header" },
+				{ role: "user", content: "client" },
+			]);
+			expect(calls[0]).not.toHaveProperty("pg_prompt");
+			expect(calls[0]).not.toHaveProperty("pg_vars");
+
+			const bodyResponse = await server.inject({
+				method: "POST",
+				url: "/v1/chat/completions",
+				headers: {
+					...authHeaders(),
+					"x-pg-prompt": "headers@@bad",
+					"x-pg-vars": "not json",
+				},
+				body: JSON.stringify({
+					model: "gpt-prompt-headers",
+					messages: [],
+					pg_prompt: "headers@1",
+					pg_vars: { name: "Body" },
+					pg_no_cache: true,
+				}),
+			});
+			expect(bodyResponse.statusCode).toBe(200);
+			expect(calls[1]?.messages).toEqual([
+				{ role: "system", content: "v1 Body" },
+			]);
+			const rows = db
+				.prepare(
+					"SELECT prompt_id, prompt_version FROM requests ORDER BY id ASC",
+				)
+				.all() as Array<{ prompt_id: number; prompt_version: number }>;
+			expect(rows).toEqual([
+				{ prompt_id: promptId, prompt_version: 2 },
+				{ prompt_id: promptId, prompt_version: 1 },
+			]);
+		} finally {
+			await server.close();
+			db.close();
+		}
+	});
+
+	test("fails malformed refs, malformed header JSON, and missing/non-string required vars before provider work", async () => {
+		const db = openTestDb();
+		seedApiKey(db, { budgetMicroUsdMonth: 0 });
+		seedPricing(db, "gpt-prompt-failure", 1_000_000, 1_000_000);
+		const promptId = seedRegistryPrompt(db, "required", [
+			{
+				messages: [{ role: "system", content: "{{name}}" }],
+				variables: [{ name: "name", required: true }],
+			},
+		]);
+		const { adapter, calls } = fakeAdapter(async (body) =>
+			fakeChatResponse({ model: body.model }),
+		);
+		const server = await buildTestServer({ openai: adapter });
+		const call = (body: object, headers: Record<string, string> = {}) =>
+			server.inject({
+				method: "POST",
+				url: "/v1/chat/completions",
+				headers: { ...authHeaders(), ...headers },
+				body: JSON.stringify({
+					model: "gpt-prompt-failure",
+					messages: [],
+					...body,
+				}),
+			});
+
+		try {
+			const malformedHeader = await call({}, { "x-pg-vars": "not json" });
+			expect(malformedHeader.statusCode).toBe(400);
+			const malformedRef = await call({ pg_prompt: "required@@1" });
+			expect(malformedRef.statusCode).toBe(404);
+			expect((malformedRef.json() as OpenAIErrorResponse).error.code).toBe(
+				"prompt_not_found",
+			);
+			const missing = await call({
+				pg_prompt: "required@1",
+				pg_vars: { name: 3 },
+			});
+			expect(missing.statusCode).toBe(400);
+			expect((missing.json() as OpenAIErrorResponse).error).toMatchObject({
+				code: "prompt_var_missing",
+				message: "Missing prompt variables: name.",
+			});
+			expect(calls).toHaveLength(0);
+			const row = db
+				.prepare(
+					"SELECT prompt_id, prompt_version, error_code FROM requests ORDER BY id DESC LIMIT 1",
+				)
+				.get() as {
+				prompt_id: number;
+				prompt_version: number;
+				error_code: string;
+			};
+			expect(row).toEqual({
+				prompt_id: promptId,
+				prompt_version: 1,
+				error_code: "prompt_var_missing",
+			});
+		} finally {
+			await server.close();
+			db.close();
+		}
+	});
+
+	test("cache key follows resolved label versions, including rollback", async () => {
+		const db = openTestDb();
+		seedApiKey(db);
+		seedPricing(db, "gpt-prompt-label", 1_000_000, 1_000_000);
+		seedRegistryPrompt(
+			db,
+			"labelled",
+			[
+				{ messages: [{ role: "system", content: "one" }], variables: [] },
+				{ messages: [{ role: "system", content: "two" }], variables: [] },
+			],
+			{ name: "prod", version: 1 },
+		);
+		const { adapter, calls } = fakeAdapter(async (body) =>
+			fakeChatResponse({ model: body.model }),
+		);
+		const server = await buildTestServer({ openai: adapter });
+		const call = () =>
+			server.inject({
+				method: "POST",
+				url: "/v1/chat/completions",
+				headers: authHeaders(),
+				body: JSON.stringify({
+					model: "gpt-prompt-label",
+					messages: [{ role: "user", content: "same" }],
+					pg_prompt: "labelled@prod",
+				}),
+			});
+
+		try {
+			expect((await call()).headers["x-pg-cache"]).toBe("miss");
+			db.prepare(
+				"UPDATE prompt_labels SET version = 2 WHERE label = 'prod'",
+			).run();
+			expect((await call()).headers["x-pg-cache"]).toBe("miss");
+			db.prepare(
+				"UPDATE prompt_labels SET version = 1 WHERE label = 'prod'",
+			).run();
+			expect((await call()).headers["x-pg-cache"]).toBe("hit");
+			expect(calls).toHaveLength(2);
+			expect(calls.map((item) => item.messages[0]?.content)).toEqual([
+				"one",
+				"two",
+			]);
+			const newest = db
+				.prepare(
+					"SELECT prompt_version, cache_hit FROM requests ORDER BY id DESC LIMIT 1",
+				)
+				.get() as { prompt_version: number; cache_hit: number };
+			expect(newest).toEqual({ prompt_version: 1, cache_hit: 1 });
+		} finally {
+			await server.close();
+			db.close();
+		}
+	});
+
+	test("fails a corrupt stored prompt safely before adapter work while retaining attribution", async () => {
+		const db = openTestDb();
+		seedApiKey(db);
+		seedPricing(db, "gpt-prompt-corrupt", 1_000_000, 1_000_000);
+		const promptId = seedRegistryPrompt(db, "corrupt", [
+			{ messages: [{ role: "system", content: "ok" }], variables: [] },
+		]);
+		db.exec("DROP TRIGGER prompt_versions_immutable");
+		db.prepare(
+			"UPDATE prompt_versions SET variables_json = 'not-json' WHERE prompt_id = ?",
+		).run(promptId);
+		const { adapter, calls } = fakeAdapter(async (body) =>
+			fakeChatResponse({ model: body.model }),
+		);
+		const server = await buildTestServer({ openai: adapter });
+
+		try {
+			const response = await server.inject({
+				method: "POST",
+				url: "/v1/chat/completions",
+				headers: authHeaders(),
+				body: JSON.stringify({
+					model: "gpt-prompt-corrupt",
+					messages: [],
+					pg_prompt: "corrupt@1",
+				}),
+			});
+			expect(response.statusCode).toBe(500);
+			expect((response.json() as OpenAIErrorResponse).error).toMatchObject({
+				code: "provider_error",
+				type: "server_error",
+			});
+			expect(calls).toHaveLength(0);
+			expect(
+				db
+					.prepare(
+						"SELECT prompt_id, prompt_version FROM requests ORDER BY id DESC LIMIT 1",
+					)
+					.get(),
+			).toEqual({ prompt_id: promptId, prompt_version: 1 });
+		} finally {
+			await server.close();
+			db.close();
+		}
+	});
+
+	test("estimates the budget from resolved template text before dispatch", async () => {
+		const db = openTestDb();
+		seedApiKey(db, { budgetMicroUsdMonth: 10 });
+		seedPricing(db, "gpt-prompt-budget", 1_000_000, 1_000_000);
+		seedRegistryPrompt(db, "budgeted", [
+			{
+				messages: [
+					{
+						role: "system",
+						content: "1234567890123456789012345678901234567890",
+					},
+				],
+				variables: [],
+			},
+		]);
+		const { adapter, calls } = fakeAdapter(async (body) =>
+			fakeChatResponse({ model: body.model }),
+		);
+		const server = await buildTestServer({ openai: adapter });
+
+		try {
+			const response = await server.inject({
+				method: "POST",
+				url: "/v1/chat/completions",
+				headers: authHeaders(),
+				body: JSON.stringify({
+					model: "gpt-prompt-budget",
+					messages: [],
+					max_tokens: 1,
+					pg_prompt: "budgeted@1",
+				}),
+			});
+			expect(response.statusCode).toBe(429);
+			expect((response.json() as OpenAIErrorResponse).error.code).toBe(
+				"budget_exceeded",
+			);
+			expect(calls).toHaveLength(0);
+		} finally {
+			await server.close();
+			db.close();
+		}
+	});
 });
 
 afterEach(() => {
@@ -155,6 +450,34 @@ function seedPricing(
 		cached_input_rate: options.cachedInputRate ?? null,
 		output_rate: outputRate,
 	});
+}
+
+function seedRegistryPrompt(
+	db: Database.Database,
+	slug: string,
+	versions: Array<{ messages: unknown; variables: unknown }>,
+	label: { name: string; version: number } | null = null,
+): number {
+	const prompt = db
+		.prepare("INSERT INTO prompts (slug) VALUES (?) RETURNING id")
+		.get(slug) as { id: number };
+	for (const [index, version] of versions.entries()) {
+		db.prepare(
+			`INSERT INTO prompt_versions (prompt_id, version, messages_json, variables_json)
+			 VALUES (?, ?, ?, ?)`,
+		).run(
+			prompt.id,
+			index + 1,
+			JSON.stringify(version.messages),
+			JSON.stringify(version.variables),
+		);
+	}
+	if (label) {
+		db.prepare(
+			"INSERT INTO prompt_labels (prompt_id, label, version) VALUES (?, ?, ?)",
+		).run(prompt.id, label.name, label.version);
+	}
+	return prompt.id;
 }
 
 function fakeChatResponse(overrides: Partial<ChatResponse> = {}): ChatResponse {
@@ -409,7 +732,7 @@ describe("POST /v1/chat/completions — success path", () => {
 		}
 	});
 
-	test("forwards the parsed body (pg_* fields intact) to the resolved adapter and preserves pg_feature in the log", async () => {
+	test("strips pg_* fields before the resolved adapter and preserves pg_feature in the log", async () => {
 		const db = openTestDb();
 		seedApiKey(db);
 		seedPricing(db, "gpt-test-estimate", 1_000_000, 2_000_000);
@@ -431,11 +754,9 @@ describe("POST /v1/chat/completions — success path", () => {
 			});
 
 			expect(response.statusCode).toBe(200);
-			expect(calls[0]).toMatchObject({
-				model: "gpt-test-estimate",
-				pg_feature: "inbox_summary",
-				pg_no_cache: true,
-			});
+			expect(calls[0]).toMatchObject({ model: "gpt-test-estimate" });
+			expect(calls[0]).not.toHaveProperty("pg_feature");
+			expect(calls[0]).not.toHaveProperty("pg_no_cache");
 
 			await new Promise((resolve) => setTimeout(resolve, 20));
 			const requestId = response.headers["x-pg-request-id"] as string;
@@ -484,10 +805,8 @@ describe("POST /v1/chat/completions — success path", () => {
 			expect(response.statusCode).toBe(200);
 			expect(response.headers["x-pg-cache"]).toBe("miss");
 			expect(calls).toHaveLength(1);
-			expect(calls[0]).toMatchObject({
-				pg_feature: "header_feature",
-				pg_no_cache: true,
-			});
+			expect(calls[0]).not.toHaveProperty("pg_feature");
+			expect(calls[0]).not.toHaveProperty("pg_no_cache");
 			expect(
 				db
 					.prepare(

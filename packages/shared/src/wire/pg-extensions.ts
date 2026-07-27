@@ -12,7 +12,26 @@ export const PgPromptRefSchema = z
 	.min(1, "pg_prompt must not be empty");
 export type PgPromptRef = z.infer<typeof PgPromptRefSchema>;
 
-export const PgVarsSchema = z.record(z.string(), z.unknown());
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+	if (typeof value !== "object" || value === null || Array.isArray(value)) {
+		return false;
+	}
+	const prototype = Object.getPrototypeOf(value);
+	return (
+		(prototype === Object.prototype || prototype === null) &&
+		Object.getOwnPropertySymbols(value).length === 0
+	);
+}
+
+/**
+ * Keep variables broad (their values are validated by prompt resolution), but
+ * preserve the caller's own JSON keys exactly. z.record clones a JSON
+ * `__proto__` data key through a normal object and drops it; this custom
+ * boundary validates a plain record while returning the original object.
+ */
+export const PgVarsSchema = z.custom<Record<string, unknown>>(isPlainRecord, {
+	message: "pg_vars must be a plain object with string keys.",
+});
 export type PgVars = z.infer<typeof PgVarsSchema>;
 
 export const PgFeatureSchema = z
