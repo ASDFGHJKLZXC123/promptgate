@@ -165,6 +165,7 @@ test("migrations 002 and 003 upgrade an already-applied 001 database without los
 			"002_request_identity.sql",
 			"003_provider_pricing.sql",
 			"004_registry.sql",
+			"005_evals.sql",
 		]);
 	} finally {
 		legacyDb.close();
@@ -222,6 +223,7 @@ test("migration 003 preserves pricing rows from an already-applied 002 database"
 			"002_request_identity.sql",
 			"003_provider_pricing.sql",
 			"004_registry.sql",
+			"005_evals.sql",
 		]);
 	} finally {
 		legacyDb.close();

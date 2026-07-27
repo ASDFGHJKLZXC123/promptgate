@@ -1,7 +1,7 @@
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import fastify, { type FastifyInstance } from "fastify";
-
+import { registerEvalAdminRoutes } from "./admin/evals.js";
 import { registerAdminRoutes } from "./admin/keys.js";
 import { registerPromptAdminRoutes } from "./admin/prompts.js";
 import { config } from "./config.js";
@@ -94,6 +94,7 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
 		(adminServer) => {
 			registerAdminRoutes(adminServer, db, budgetGuard);
 			registerPromptAdminRoutes(adminServer, db);
+			registerEvalAdminRoutes(adminServer, db);
 		},
 		{ prefix: "/admin" },
 	);

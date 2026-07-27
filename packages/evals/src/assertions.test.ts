@@ -146,13 +146,6 @@ describe("ASSERTIONS", () => {
 			"export default (output) => output === 'ok';",
 			"assertion#edge?.mjs",
 		);
-		const build = spawnSync(
-			"pnpm",
-			["--filter", "@promptgate/evals", "build"],
-			{ encoding: "utf8" },
-		);
-		expect(build.status, build.stderr).toBe(0);
-
 		const moduleUrl = pathToFileURL(
 			resolve(process.cwd(), "packages/evals/dist/assertions.js"),
 		).href;

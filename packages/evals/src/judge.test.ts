@@ -238,12 +238,6 @@ function jsonResponse(body: unknown, status = 200): Response {
 
 describe("judge rubric seed", () => {
 	test("loads the checked-in fixture from the built Node 22 path", () => {
-		const build = spawnSync(
-			"pnpm",
-			["--filter", "@promptgate/evals", "build"],
-			{ encoding: "utf8" },
-		);
-		expect(build.status, build.stderr).toBe(0);
 		const modulePath = resolve(
 			process.cwd(),
 			"packages/evals/dist/judge-seed.js",

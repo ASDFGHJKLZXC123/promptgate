@@ -57,9 +57,9 @@ describe("pg-eval CLI scaffold", () => {
 		},
 	);
 
-	test("prints help without selecting a command", () => {
+	test("prints help without selecting a command", async () => {
 		const { io, stderr, stdout } = createIo();
-		expect(runCli(["--help"], io)).toBe(0);
+		await expect(runCli(["--help"], io)).resolves.toBe(0);
 		expect(stdout).toHaveBeenCalledWith(usage);
 		expect(stderr).not.toHaveBeenCalled();
 	});
@@ -73,12 +73,62 @@ describe("pg-eval CLI scaffold", () => {
 		).toThrow("Option --dataset is not supported by pg-eval comment.");
 	});
 
-	test("returns infrastructure exit code until command logic exists", () => {
+	test("returns infrastructure exit code for invalid run input", async () => {
 		const { io, stderr } = createIo();
-		expect(runCli(["run"], io)).toBe(2);
+		await expect(runCli(["run"], io)).resolves.toBe(2);
 		expect(stderr).toHaveBeenCalledWith(
-			"pg-eval run is scaffolded but not implemented yet.",
+			"pg-eval run requires --dataset and --prompt.",
 		);
+	});
+
+	test("source executable reaches argument validation without resolving compiled-only modules", () => {
+		const result = spawnSync(
+			"pnpm",
+			["--filter", "@promptgate/evals", "exec", "pg-eval", "run"],
+			{ cwd: process.cwd(), encoding: "utf8" },
+		);
+		// pnpm wraps the executable's process status 2 as its own status 1.
+		expect(result.status).toBe(1);
+		expect(result.stderr).toContain("requires --dataset and --prompt");
+		expect(result.stderr).not.toContain("ERR_MODULE_NOT_FOUND");
+	});
+
+	test("source executable loads runtime modules on a valid command before missing-config failure", () => {
+		const result = spawnSync(
+			"pnpm",
+			[
+				"--filter",
+				"@promptgate/evals",
+				"exec",
+				"pg-eval",
+				"run",
+				"--dataset",
+				"fixture",
+				"--prompt",
+				"safety@1",
+			],
+			{ cwd: process.cwd(), encoding: "utf8" },
+		);
+		expect(result.stderr).toContain("Gateway URL");
+		expect(result.stderr).not.toContain("ERR_MODULE_NOT_FOUND");
+	});
+
+	test("built CLI loads its compiled runtime modules", () => {
+		const result = spawnSync(
+			process.execPath,
+			[
+				resolve(process.cwd(), "packages/evals/dist/cli.js"),
+				"run",
+				"--dataset",
+				"fixture",
+				"--prompt",
+				"safety@1",
+			],
+			{ cwd: process.cwd(), encoding: "utf8" },
+		);
+		expect(result.status).toBe(2);
+		expect(result.stderr).toContain("Gateway URL");
+		expect(result.stderr).not.toContain("ERR_MODULE_NOT_FOUND");
 	});
 
 	test("exposes a clean-checkout source executable without requiring dist", () => {

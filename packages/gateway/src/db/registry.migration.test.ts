@@ -122,7 +122,7 @@ test("applies the registry schema with composite label integrity and immutable v
 	).toEqual({ version: 2 });
 });
 
-test("upgrades a database through migration 004 while preserving existing rows", () => {
+test("upgrades a database through migration 005 while preserving existing rows", () => {
 	for (const migration of [
 		"001_core.sql",
 		"002_request_identity.sql",
@@ -160,6 +160,7 @@ test("upgrades a database through migration 004 while preserving existing rows",
 		{ name: "002_request_identity.sql" },
 		{ name: "003_provider_pricing.sql" },
 		{ name: "004_registry.sql" },
+		{ name: "005_evals.sql" },
 	]);
 	expect(
 		db
@@ -173,7 +174,7 @@ test("upgrades a database through migration 004 while preserving existing rows",
 	]);
 });
 
-test("migration runner is idempotent after applying registry migration", () => {
+test("migration runner is idempotent after applying migrations through 005", () => {
 	migrate(db);
 	const before = db
 		.prepare("SELECT name, applied_at FROM _migrations ORDER BY name")
@@ -191,4 +192,104 @@ test("migration runner is idempotent after applying registry migration", () => {
 			)
 			.get(),
 	).toEqual({ count: 1 });
+});
+
+test("applies the eval schema with foreign-key and value constraints", () => {
+	migrate(db);
+
+	const tables = db
+		.prepare(
+			"SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('eval_datasets', 'eval_runs', 'eval_results') ORDER BY name",
+		)
+		.all() as Array<{ name: string }>;
+	expect(tables.map((row) => row.name)).toEqual([
+		"eval_datasets",
+		"eval_results",
+		"eval_runs",
+	]);
+	expect(db.prepare("PRAGMA index_list(eval_runs)").all()).toEqual(
+		expect.arrayContaining([
+			expect.objectContaining({ name: "idx_eval_runs_history" }),
+		]),
+	);
+
+	const datasetId = (
+		db
+			.prepare(
+				"INSERT INTO eval_datasets (slug, file_path) VALUES ('suite', 'suite.yaml') RETURNING id",
+			)
+			.get() as { id: number }
+	).id;
+	const insertRun = db.prepare(
+		`INSERT INTO eval_runs (
+			dataset_id, dataset_hash, model, trigger, cases_total, cases_passed,
+			score_avg, cost_micro_usd, duration_ms
+		) VALUES (
+			@dataset_id, @dataset_hash, 'model', @trigger, @cases_total,
+			@cases_passed, @score_avg, @cost_micro_usd, @duration_ms
+		) RETURNING id`,
+	);
+	const validRun = {
+		dataset_id: datasetId,
+		dataset_hash: "a".repeat(64),
+		trigger: "ci",
+		cases_total: 1,
+		cases_passed: 1,
+		score_avg: 1,
+		cost_micro_usd: 2,
+		duration_ms: 3,
+	};
+
+	expect(() =>
+		insertRun.get({ ...validRun, dataset_id: datasetId + 999 }),
+	).toThrow(/FOREIGN KEY constraint failed/);
+	expect(() => insertRun.get({ ...validRun, cases_total: 0 })).toThrow(
+		/CHECK constraint failed/,
+	);
+	expect(() => insertRun.get({ ...validRun, cases_passed: 2 })).toThrow(
+		/CHECK constraint failed/,
+	);
+	expect(() => insertRun.get({ ...validRun, score_avg: 1.1 })).toThrow(
+		/CHECK constraint failed/,
+	);
+	expect(() => insertRun.get({ ...validRun, trigger: "nightly" })).toThrow(
+		/CHECK constraint failed/,
+	);
+	expect(() => insertRun.get({ ...validRun, cost_micro_usd: -1 })).toThrow(
+		/CHECK constraint failed/,
+	);
+	expect(() => insertRun.get({ ...validRun, duration_ms: -1 })).toThrow(
+		/CHECK constraint failed/,
+	);
+
+	const runId = (insertRun.get(validRun) as { id: number }).id;
+	const insertResult = db.prepare(
+		`INSERT INTO eval_results (
+			run_id, case_id, passed, score, detail_json, latency_ms, cost_micro_usd
+		) VALUES (
+			@run_id, 'case', @passed, @score, '{}', @latency_ms, @cost_micro_usd
+		)`,
+	);
+	const validResult = {
+		run_id: runId,
+		passed: 1,
+		score: 1,
+		latency_ms: 1,
+		cost_micro_usd: 2,
+	};
+	expect(() =>
+		insertResult.run({ ...validResult, run_id: runId + 999 }),
+	).toThrow(/FOREIGN KEY constraint failed/);
+	expect(() => insertResult.run({ ...validResult, passed: 2 })).toThrow(
+		/CHECK constraint failed/,
+	);
+	expect(() => insertResult.run({ ...validResult, score: -0.1 })).toThrow(
+		/CHECK constraint failed/,
+	);
+	expect(() => insertResult.run({ ...validResult, latency_ms: -1 })).toThrow(
+		/CHECK constraint failed/,
+	);
+	expect(() =>
+		insertResult.run({ ...validResult, cost_micro_usd: -1 }),
+	).toThrow(/CHECK constraint failed/);
 });
