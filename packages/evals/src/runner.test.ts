@@ -1,4 +1,6 @@
+import { spawnSync } from "node:child_process";
 import { resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, test, vi } from "vitest";
 
 import { datasetPath, runEvaluation } from "./runner.js";
@@ -24,12 +26,32 @@ const dataset = {
 describe("eval runner", () => {
 	test("resolves dataset slugs and explicit YAML paths without duplicating extensions", () => {
 		expect(datasetPath("safety")).toBe(
-			resolve(process.cwd(), "packages/evals/datasets/safety.yaml"),
+			fileURLToPath(new URL("../datasets/safety.yaml", import.meta.url)),
 		);
 		expect(datasetPath("missing-suite.yaml")).toBe(
 			resolve("missing-suite.yaml"),
 		);
 		expect(datasetPath("missing-suite.yml")).toBe(resolve("missing-suite.yml"));
+	});
+
+	test("resolves a checked-in slug from the evals package working directory", () => {
+		const packageRoot = fileURLToPath(new URL("../", import.meta.url));
+		const runtime = spawnSync(
+			process.execPath,
+			[
+				"--input-type=module",
+				"--eval",
+				"const { datasetPath } = await import(process.argv[1]); process.stdout.write(datasetPath('safety_screening'));",
+				fileURLToPath(new URL("../dist/runner.js", import.meta.url)),
+			],
+			{ cwd: packageRoot, encoding: "utf8" },
+		);
+		expect(runtime.status, runtime.stderr).toBe(0);
+		expect(runtime.stdout).toBe(
+			fileURLToPath(
+				new URL("../datasets/safety_screening.yaml", import.meta.url),
+			),
+		);
 	});
 
 	test("rejects an invalid supplied git SHA before reading the dataset or contacting services", async () => {

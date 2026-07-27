@@ -1,6 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { z } from "zod";
 import type { AdminClient, PromptSummary } from "./admin-client.js";
 import {
@@ -74,7 +75,9 @@ const HistoricalRunsSchema = z.array(
 export function datasetPath(value: string): string {
 	if (existsSync(value)) return value;
 	if (/\.ya?ml$/i.test(value)) return resolve(value);
-	return resolve(process.cwd(), "packages/evals/datasets", `${value}.yaml`);
+	return fileURLToPath(
+		new URL(`../datasets/${datasetSlug(value)}.yaml`, import.meta.url),
+	);
 }
 function datasetSlug(value: string): string {
 	const base = value.replaceAll("\\", "/").split("/").pop() ?? value;

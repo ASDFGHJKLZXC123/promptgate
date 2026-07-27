@@ -398,9 +398,10 @@ Supported assertion types (v1): `equals`, `contains`, `icontains`, `regex`, `is-
 ### 7.2 Runner
 
 ```
-pg-eval run --dataset safety_screening --prompt safety_screen@candidate \
-            --baseline prod --gateway http://localhost:8787 \
-            --key $PG_EVAL_KEY --admin-token $PG_ADMIN_TOKEN
+./node_modules/.bin/pg-eval run \
+  --dataset safety_screening --prompt safety_screen@candidate \
+  --baseline prod --gateway http://localhost:8787 \
+  --key $PG_EVAL_KEY --admin-token $PG_ADMIN_TOKEN
 ```
 
 - All eval traffic goes **through the gateway itself** (dogfooding: evals get metered and budgeted like any client) with `pg_no_cache: true` — persisted quality measurements must hit live models or drift stays invisible (`--allow-cache` exists for local harness development only and marks the run `trigger: 'manual'`). The human-approved Phase 5 matrix contains exactly **`gemini-2.5-flash` and `deepseek-v4-flash`** as targets. Judge calls also go through the gateway and cross providers: DeepSeek judges Gemini output, while Gemini judges DeepSeek output. Neither model may judge itself. Each judge uses `response_format: {type: "json_object"}` and the immutable registry prompt `judge_rubric_v1@1`.
@@ -413,6 +414,8 @@ pg-eval run --dataset safety_screening --prompt safety_screen@candidate \
   - exit 1 if `pass_rate < threshold` (from dataset `defaultTest.threshold`)
   - exit 1 if `score_avg` drops more than `--max-score-drop` (default 0.05) vs the baseline run
   - exit 2 on infrastructure failure (gateway unreachable, budget blown, malformed judge output) — distinguishable in CI logs from a genuine quality regression
+- Invoke the repo-root `./node_modules/.bin/pg-eval` directly. pnpm 10.33's filtered `exec` wrapper collapses a child status `2` to `1`, which would erase the infrastructure-versus-quality distinction. The workspace-owned bin remains source-backed in clean checkouts.
+- Named checked-in datasets resolve relative to the eval package, independent of the caller's working directory; explicit existing paths and explicit `.yaml`/`.yml` paths retain their caller-relative behavior.
 - Every run writes `eval_runs` + `eval_results` (via the admin API) with `git_sha` (from `GITHUB_SHA` or `git rev-parse`) and `dataset_hash`, and prints a markdown summary table to stdout (becomes the PR comment).
 
 ### 7.3 Golden dataset seeding (decision #12)
@@ -447,12 +450,12 @@ jobs:
           echo "DEEPSEEK_API_KEY=${{ secrets.DEEPSEEK_API_KEY }}" >> .env
           grep ADMIN_TOKEN .env >> "$GITHUB_ENV"     # pg-eval needs it too
       - run: docker compose up -d --wait             # gateway + fresh sqlite
-      - run: pnpm --filter @promptgate/evals exec pg-eval seed-ci   # $1 ci key, prompts, labels, dataset
+      - run: ./node_modules/.bin/pg-eval seed-ci   # $1 ci key, prompts, labels, dataset
       - run: >
-          pnpm --filter @promptgate/evals exec pg-eval run
+          ./node_modules/.bin/pg-eval run
           --dataset safety_screening --prompt safety_screen@candidate
           --baseline prod                            # paired: runs prod then candidate in this fresh DB
-      - run: pnpm --filter @promptgate/evals exec pg-eval comment   # optional PR summary, needs GITHUB_TOKEN
+      - run: ./node_modules/.bin/pg-eval comment   # optional PR summary, needs GITHUB_TOKEN
 ```
 
 Cost control in CI (the decision-#2 trade-off, mitigated): the CI gateway key is created with a **$1 monthly circuit-breaker budget** enforced by reserve-then-reconcile (§3.5) — a runaway loop fails the build with `budget_exceeded`; cheap pinned models; fresh DB per run keeps runs honest (the pennies are the price of trust). Secret hardening: use **dedicated provider keys for CI with provider-side spend limits as the absolute monetary wall** (the gateway estimate cannot stop PR code from calling providers directly with the env keys), keep the workflow on `pull_request` (not `pull_request_target`), and pin actions to full commit SHAs.

@@ -306,9 +306,9 @@ sqlite3 data/promptgate.db "SELECT prompt_id, prompt_version FROM requests ORDER
 
 Human-approved gate amendment (2026-07-27): Phase 5 runs exactly `gemini-2.5-flash` and `deepseek-v4-flash` as targets and cross-judges them. DeepSeek judges Gemini output, Gemini judges DeepSeek output, and neither model judges itself. OpenAI and Anthropic remain supported gateway providers but are not Phase 5 target or judge models. Phase 6's later four-provider requirement is unchanged.
 
-1. **Package scaffold.** `packages/evals`: deps `yaml zod`, bin entry `pg-eval` → `src/cli.ts` (hand-rolled arg parsing or `node:util` parseArgs — no commander needed for 3 commands: `run`, `seed-ci`, `comment`).
+1. **Package scaffold.** `packages/evals`: deps `yaml zod`, bin entry `pg-eval` → `src/cli.ts` (hand-rolled arg parsing or `node:util` parseArgs — no commander needed for 3 commands: `run`, `seed-ci`, `comment`). The root workspace link exposes `./node_modules/.bin/pg-eval`; invoke that path directly so infrastructure exit `2` is not collapsed to `1` by pnpm's filtered `exec` wrapper.
 
-2. **Dataset schema.** Zod mirror of §7.1's YAML (description, prompts as registry refs, providers/models list, `defaultTest.threshold` — promptfoo's actual path, not under `options` — tests[] with description/vars/assert[]). Loader resolves `file://` javascript asserts relative to the dataset file and computes `dataset_hash` (sha256 of the file). Every test gets a stable `id`: explicit `id:` field or slugified description — warn on collision.
+2. **Dataset schema.** Zod mirror of §7.1's YAML (description, prompts as registry refs, providers/models list, `defaultTest.threshold` — promptfoo's actual path, not under `options` — tests[] with description/vars/assert[]). Loader resolves named checked-in datasets relative to the eval package rather than the caller's working directory, resolves `file://` javascript asserts relative to the dataset file, and computes `dataset_hash` (sha256 of the file). Every test gets a stable `id`: explicit `id:` field or slugified description — warn on collision.
 
 3. **Assertion registry.** `src/assertions.ts`:
    ```ts
@@ -330,7 +330,7 @@ Human-approved gate amendment (2026-07-27): Phase 5 runs exactly `gemini-2.5-fla
 
 **Verify phase 5:**
 ```bash
-pnpm --filter @promptgate/evals exec pg-eval run --dataset safety_screening \
+./node_modules/.bin/pg-eval run --dataset safety_screening \
   --prompt safety_screen@candidate --baseline prod \
   --gateway http://localhost:8787 --key $KEY --admin-token $ADMIN_TOKEN
 echo $?    # 0 on the good prompt

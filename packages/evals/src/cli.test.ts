@@ -4,6 +4,8 @@ import { resolve } from "node:path";
 import { describe, expect, test, vi } from "vitest";
 import { type CliIo, parseCli, runCli, usage } from "./cli.js";
 
+const sourceBin = resolve(process.cwd(), "node_modules/.bin/pg-eval");
+
 function createIo(): {
 	io: CliIo;
 	stderr: ReturnType<typeof vi.fn>;
@@ -82,33 +84,22 @@ describe("pg-eval CLI scaffold", () => {
 	});
 
 	test("source executable reaches argument validation without resolving compiled-only modules", () => {
-		const result = spawnSync(
-			"pnpm",
-			["--filter", "@promptgate/evals", "exec", "pg-eval", "run"],
-			{ cwd: process.cwd(), encoding: "utf8" },
-		);
-		// pnpm wraps the executable's process status 2 as its own status 1.
-		expect(result.status).toBe(1);
+		const result = spawnSync(sourceBin, ["run"], {
+			cwd: process.cwd(),
+			encoding: "utf8",
+		});
+		expect(result.status).toBe(2);
 		expect(result.stderr).toContain("requires --dataset and --prompt");
 		expect(result.stderr).not.toContain("ERR_MODULE_NOT_FOUND");
 	}, 15_000);
 
 	test("source executable loads runtime modules on a valid command before missing-config failure", () => {
 		const result = spawnSync(
-			"pnpm",
-			[
-				"--filter",
-				"@promptgate/evals",
-				"exec",
-				"pg-eval",
-				"run",
-				"--dataset",
-				"fixture",
-				"--prompt",
-				"safety@1",
-			],
+			sourceBin,
+			["run", "--dataset", "fixture", "--prompt", "safety@1"],
 			{ cwd: process.cwd(), encoding: "utf8" },
 		);
+		expect(result.status).toBe(2);
 		expect(result.stderr).toContain("Gateway URL");
 		expect(result.stderr).not.toContain("ERR_MODULE_NOT_FOUND");
 	}, 15_000);
@@ -138,11 +129,10 @@ describe("pg-eval CLI scaffold", () => {
 		) as { bin?: Record<string, string> };
 		expect(packageJson.bin).toEqual({ "pg-eval": "./src/cli.ts" });
 
-		const result = spawnSync(
-			"pnpm",
-			["--filter", "@promptgate/evals", "exec", "pg-eval", "--help"],
-			{ cwd: process.cwd(), encoding: "utf8" },
-		);
+		const result = spawnSync(sourceBin, ["--help"], {
+			cwd: process.cwd(),
+			encoding: "utf8",
+		});
 		expect(result.error).toBeUndefined();
 		expect(result.status).toBe(0);
 		expect(result.stdout).toBe(`${usage}\n`);
