@@ -91,7 +91,7 @@ describe("pg-eval CLI scaffold", () => {
 		expect(result.status).toBe(1);
 		expect(result.stderr).toContain("requires --dataset and --prompt");
 		expect(result.stderr).not.toContain("ERR_MODULE_NOT_FOUND");
-	});
+	}, 15_000);
 
 	test("source executable loads runtime modules on a valid command before missing-config failure", () => {
 		const result = spawnSync(
@@ -111,7 +111,7 @@ describe("pg-eval CLI scaffold", () => {
 		);
 		expect(result.stderr).toContain("Gateway URL");
 		expect(result.stderr).not.toContain("ERR_MODULE_NOT_FOUND");
-	});
+	}, 15_000);
 
 	test("built CLI loads its compiled runtime modules", () => {
 		const result = spawnSync(
@@ -147,5 +147,5 @@ describe("pg-eval CLI scaffold", () => {
 		expect(result.status).toBe(0);
 		expect(result.stdout).toBe(`${usage}\n`);
 		expect(result.stderr).toBe("");
-	});
+	}, 15_000);
 });

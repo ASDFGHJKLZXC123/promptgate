@@ -4,5 +4,13 @@
 		"enabled": true,
 		"clientKind": "git",
 		"useIgnoreFile": true
-	}
+	},
+	"overrides": [
+		{
+			"includes": ["docs/evidence/phase-5-fable-generation-output.json"],
+			"formatter": {
+				"enabled": false
+			}
+		}
+	]
 }

@@ -23,7 +23,7 @@ A self-hosted **model gateway** (multi-provider routing — already a mastered p
 ## Scope guard
 4 providers (amended 2026-07-25, see decision #2), 1 golden dataset (reuse a task from an existing app — e.g. carematch_ai's safety screening), 1 CI gate. Not a SaaS: single-tenant, self-hosted.
 
-## Decisions (locked 2026-07-12; amended 2026-07-15 after human-approved plan reviews and 2026-07-25 for the four-provider scope amendment — see PROGRESS.md decision log)
+## Decisions (locked 2026-07-12; amended 2026-07-15 after human-approved plan reviews, 2026-07-25 for the four-provider scope, and 2026-07-26 for decision #12 provenance — see PROGRESS.md decision log)
 
 ### A. Architecture
 1. **Gateway API surface: Chat Completions-compatible subset of `/v1/chat/completions`** (the fields the dogfood apps use, not universal OpenAI compatibility). Makes dogfooding a base-URL change (see #16).
@@ -43,7 +43,7 @@ A self-hosted **model gateway** (multi-provider routing — already a mastered p
 ### D. Eval harness
 10. **Custom harness core with promptfoo-compatible dataset format.** Custom proves the empty concept cell; format compatibility shows ecosystem awareness and gives free test data.
 11. **Judge: deterministic assertions first; GPT-5.6 Terra at high reasoning only where needed.** The runtime judge remains a small, explicitly invoked part of the gate; it is not used when deterministic assertions are sufficient.
-12. **Golden dataset: seed from carematch_ai (now in `Archive/`, still readable), expand synthetically to ~50 labeled cases.** carematch has no dataset per se — extract its ~6 in-code safety test cases plus the keyword-urgency logic as seeds.
+12. **Golden dataset: seed from verified carematch_ai safety artifacts, expand synthetically to ~50 labeled cases.** The recoverable sources are `server/safety.js` at public commit `d22bf9d798ed22b77690a02a02a9284494ca188c` and the exact safety probes retained in the 2026-05-23 build session. No six-case test file is verifiable: preserve recovered probe inputs verbatim, identify policy-derived cases as derived rather than original, identify model-generated cases as synthetic, and hand-review every final label.
 
 ### E. Ops
 13. **CI: GitHub Actions** (portfolio-wide standard).

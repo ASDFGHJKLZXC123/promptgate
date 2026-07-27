@@ -326,7 +326,7 @@ Future prerequisite (not a Phase 1 blocker): decision #11 still locks the live j
 
 6. **Run + persist + compare.** At start: resolve every label ref to a concrete version (frozen for the whole run, §7.2) and upsert the dataset via `POST /admin/api/evals/datasets`. Runner creates **one `eval_runs` row per model**, loops that model's cases, persists run + results via `POST /admin/api/evals/runs` (admin token from `--admin-token`/`PG_ADMIN_TOKEN` — eval traffic and persistence use different credentials, §5.2). `--baseline prod` is **paired**: run the baseline ref first, then the candidate, compare within the pair (works in a fresh CI database); `--baseline-from-history` for cheap local iteration only. Apply §7.2's exit-code contract verbatim. Print the markdown summary table (case, model, pass, score, first failed assertion detail).
 
-7. **Golden dataset.** Execute §7.3: port carematch's cases (`TODO(verify)` lives there), synth-expand, hand-review, commit `safety_screening.yaml` + `asserts/*.js`.
+7. **Golden dataset.** Execute amended §7.3: preserve the recoverable carematch probes, derive additional seeds from the immutable safety policy without calling them verbatim originals, expand with Claude Fable 5 / high, and hand-review every final label. Commit `safety_screening.yaml`, `asserts/*.js`, and `docs/evidence/phase-5-seed-provenance.md` together.
 
 **Verify phase 5:**
 ```bash

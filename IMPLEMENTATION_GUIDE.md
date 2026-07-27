@@ -1,6 +1,6 @@
 # PromptGate — Implementation Guide
 
-Companion to `PromptGate_PROJECT_IDEA.md`. All 17 locked decisions (2026-07-12) are treated as fixed, except decision #2, human-approved amended 2026-07-25 to four providers (OpenAI, Anthropic, Gemini, DeepSeek) — see `PROGRESS.md`'s decision log; `GEMINI_API_KEY`/`DEEPSEEK_API_KEY` join the optional-at-boot provider keys (§1's config, BUILD_PLAYBOOK.md phase 1 step 9). Sections referencing code in `carematch_ai` (Archive/) or `web_builder_llm` (Finished/) carry `TODO(verify)` markers — confirm against the actual repos when you reach those phases.
+Companion to `PromptGate_PROJECT_IDEA.md`. All 17 locked decisions (2026-07-12) are treated as fixed except the human-approved amendments recorded in `PROGRESS.md`: decision #2 expanded to OpenAI, Anthropic, Gemini, and DeepSeek on 2026-07-25, and decision #12 received the verified carematch provenance correction on 2026-07-26. `GEMINI_API_KEY`/`DEEPSEEK_API_KEY` join the optional-at-boot provider keys (§1's config, BUILD_PLAYBOOK.md phase 1 step 9). The carematch `TODO(verify)` is resolved in §7.3 from the immutable public source plus retained build-session evidence; `web_builder_llm` references still carry `TODO(verify)` markers to confirm against the finished repository when their phases consume them.
 
 ---
 
@@ -419,8 +419,9 @@ pg-eval run --dataset safety_screening --prompt safety_screen@candidate \
 
 ### 7.3 Golden dataset seeding (decision #12)
 
-- `TODO(verify)`: extract carematch_ai's ~6 in-code safety test cases and the keyword-urgency logic from `Archive/carematch_ai` — exact file paths unknown from here; find the test file that exercises safety screening and port inputs/expected outcomes verbatim as the first 6 YAML cases.
-- Expand to ~50 cases synthetically: generate candidates with a strong model across a severity matrix (explicit risk / masked risk / ambiguous idiom / benign-with-scary-words / benign), then **hand-review every label** — an unreviewed synthetic golden set is a rubber stamp, not a gate. Budget an evening for the review; it's the highest-leverage hour of the whole eval track.
+- `TODO(verify)` resolved by the project-owner-approved 2026-07-26 provenance amendment: the local archive has no carematch repository, and public commit `d22bf9d798ed22b77690a02a02a9284494ca188c` contains `server/safety.js` but no test file. The retained 2026-05-23 build session preserves two valid symptom probes, one whitespace validation probe, and one unsafe generated-output probe; it does not preserve six input cases. Never describe policy-derived or synthetic cases as verbatim carematch tests.
+- Seed from the recoverable artifacts and record case-level provenance in `docs/evidence/phase-5-seed-provenance.md`. Every case has exactly one input provenance class: `observed-input` for an exact retained symptom probe, `observed-validation` for the whitespace boundary probe, `policy-derived` for a case derived from the committed urgency or diagnostic-wording policy, or `fable-synthetic` for an expansion candidate. A case may additionally cite zero or more assertion-evidence artifacts. The observed `"You have appendicitis."` output is `observed-output` assertion evidence, not an input class or fourth input.
+- Expand to ~50 cases with Claude Fable 5 / high across a severity matrix (explicit risk / masked risk / ambiguous idiom / benign-with-scary-words / benign). Preserve the generation prompt and output digests plus each synthetic case's parent seed, then **hand-review every label** — an unreviewed synthetic golden set is a rubber stamp, not a gate. Budget an evening for the review; it's the highest-leverage hour of the whole eval track.
 - Case ids are stable slugs (`self_harm_explicit_01`), because `eval_results` keys on them across runs.
 
 ### 7.4 CI gate (deliverable 3)
