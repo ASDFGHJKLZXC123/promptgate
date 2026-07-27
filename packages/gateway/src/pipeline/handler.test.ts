@@ -448,6 +448,110 @@ describe("POST /v1/chat/completions — success path", () => {
 			db.close();
 		}
 	});
+
+	test("uses validated x-pg-feature and x-pg-no-cache fallbacks for logging and both cache paths", async () => {
+		const db = openTestDb();
+		seedApiKey(db);
+		seedPricing(db, "gpt-header-fallback", 1_000_000, 2_000_000);
+		const body: ChatRequest = {
+			model: "gpt-header-fallback",
+			messages: [{ role: "user", content: "bypass by header" }],
+		};
+		seedCacheEntry(
+			db,
+			body,
+			fakeChatResponse({ model: "gpt-header-fallback" }),
+		);
+		const originalCache = db
+			.prepare("SELECT response_json, usage_json, hit_count FROM cache_entries")
+			.get();
+		const { adapter, calls } = fakeAdapter(async () =>
+			fakeChatResponse({ model: "gpt-header-fallback" }),
+		);
+		const server = await buildTestServer({ openai: adapter });
+
+		try {
+			const response = await server.inject({
+				method: "POST",
+				url: "/v1/chat/completions",
+				headers: {
+					...authHeaders(),
+					"x-pg-feature": "header_feature",
+					"x-pg-no-cache": "true",
+				},
+				body: JSON.stringify(body),
+			});
+			expect(response.statusCode).toBe(200);
+			expect(response.headers["x-pg-cache"]).toBe("miss");
+			expect(calls).toHaveLength(1);
+			expect(calls[0]).toMatchObject({
+				pg_feature: "header_feature",
+				pg_no_cache: true,
+			});
+			expect(
+				db
+					.prepare(
+						"SELECT response_json, usage_json, hit_count FROM cache_entries",
+					)
+					.get(),
+			).toEqual(originalCache);
+			const row = db
+				.prepare("SELECT feature FROM requests WHERE request_id = ?")
+				.get(response.headers["x-pg-request-id"]) as {
+				feature: string | null;
+			};
+			expect(row.feature).toBe("header_feature");
+		} finally {
+			await server.close();
+			db.close();
+		}
+	});
+
+	test("gives body pg_feature and pg_no_cache precedence over conflicting headers", async () => {
+		const db = openTestDb();
+		seedApiKey(db);
+		seedPricing(db, "gpt-header-precedence", 1_000_000, 2_000_000);
+		const body: ChatRequest = {
+			model: "gpt-header-precedence",
+			messages: [{ role: "user", content: "body wins" }],
+			pg_feature: "body_feature",
+			pg_no_cache: false,
+		};
+		seedCacheEntry(
+			db,
+			body,
+			fakeChatResponse({ model: "gpt-header-precedence" }),
+		);
+		const { adapter, calls } = fakeAdapter(async () =>
+			fakeChatResponse({ model: "gpt-header-precedence" }),
+		);
+		const server = await buildTestServer({ openai: adapter });
+
+		try {
+			const response = await server.inject({
+				method: "POST",
+				url: "/v1/chat/completions",
+				headers: {
+					...authHeaders(),
+					"x-pg-feature": "header_feature",
+					"x-pg-no-cache": "true",
+				},
+				body: JSON.stringify(body),
+			});
+			expect(response.statusCode).toBe(200);
+			expect(response.headers["x-pg-cache"]).toBe("hit");
+			expect(calls).toHaveLength(0);
+			const row = db
+				.prepare("SELECT feature FROM requests WHERE request_id = ?")
+				.get(response.headers["x-pg-request-id"]) as {
+				feature: string | null;
+			};
+			expect(row.feature).toBe("body_feature");
+		} finally {
+			await server.close();
+			db.close();
+		}
+	});
 });
 
 describe("POST /v1/chat/completions — cache read path", () => {
@@ -656,6 +760,7 @@ describe("POST /v1/chat/completions — cache read path", () => {
 
 describe("POST /v1/chat/completions — auth, validation, unknown model, streaming", () => {
 	test("rejects an unauthenticated request before the adapter is ever invoked", async () => {
+		const db = openTestDb();
 		const { adapter, calls } = fakeAdapter(async () => fakeChatResponse());
 		const server = await buildTestServer({ openai: adapter });
 
@@ -671,15 +776,27 @@ describe("POST /v1/chat/completions — auth, validation, unknown model, streami
 			expect((response.json() as OpenAIErrorResponse).error.code).toBe(
 				"invalid_pg_key",
 			);
+			// Auth is outside the route's log-initialization hook, so an invalid
+			// credential never creates an authenticated audit row.
+			expect(
+				(
+					db.prepare("SELECT COUNT(*) AS count FROM requests").get() as {
+						count: number;
+					}
+				).count,
+			).toBe(0);
 			expect(calls).toHaveLength(0);
 		} finally {
 			await server.close();
+			db.close();
 		}
 	});
 
 	test("rejects an invalid body with invalid_request_error", async () => {
 		const db = openTestDb();
-		seedApiKey(db);
+		// A zero budget would reject any valid request, so the 400 proves
+		// validation happens before provider/pricing resolution and reservation.
+		seedApiKey(db, { budgetMicroUsdMonth: 0 });
 		const { adapter, calls } = fakeAdapter(async () => fakeChatResponse());
 		const server = await buildTestServer({ openai: adapter });
 
@@ -702,9 +819,61 @@ describe("POST /v1/chat/completions — auth, validation, unknown model, streami
 		}
 	});
 
+	test.each([
+		{
+			name: "x-pg-feature",
+			headers: { "x-pg-feature": "" },
+		},
+		{
+			name: "x-pg-no-cache",
+			headers: { "x-pg-no-cache": "TRUE" },
+		},
+	])(
+		"rejects an invalid $name header before cache or adapter work",
+		async ({ headers }) => {
+			const db = openTestDb();
+			seedApiKey(db);
+			seedPricing(db, "gpt-invalid-header", 1_000_000, 2_000_000);
+			const { adapter, calls } = fakeAdapter(async () => fakeChatResponse());
+			const server = await buildTestServer({ openai: adapter });
+
+			try {
+				const response = await server.inject({
+					method: "POST",
+					url: "/v1/chat/completions",
+					headers: { ...authHeaders(), ...headers },
+					body: JSON.stringify({
+						model: "gpt-invalid-header",
+						messages: [{ role: "user", content: "hi" }],
+					}),
+				});
+				expect(response.statusCode).toBe(400);
+				expect((response.json() as OpenAIErrorResponse).error.code).toBe(
+					"invalid_request_error",
+				);
+				expect(calls).toHaveLength(0);
+				expect(
+					db
+						.prepare(
+							"SELECT status, error_code FROM requests WHERE request_id = ?",
+						)
+						.get(response.headers["x-pg-request-id"]),
+				).toEqual({
+					status: "rejected_validation",
+					error_code: "invalid_request_error",
+				});
+			} finally {
+				await server.close();
+				db.close();
+			}
+		},
+	);
+
 	test("rejects an unknown/unpriced model with unknown_model", async () => {
 		const db = openTestDb();
-		seedApiKey(db);
+		// This must remain unknown_model rather than budget_exceeded: routing and
+		// pricing resolution precede the budget admission check.
+		seedApiKey(db, { budgetMicroUsdMonth: 0 });
 		const { adapter, calls } = fakeAdapter(async () => fakeChatResponse());
 		const server = await buildTestServer({ openai: adapter });
 
@@ -1016,14 +1185,22 @@ describe("POST /v1/chat/completions — logging lifecycle", () => {
 		seedPricing(db, "gpt-test-estimate", 1_000_000, 2_000_000);
 		const { adapter } = fakeAdapter(async () => fakeChatResponse());
 		const server = await buildTestServer({ openai: adapter });
-		let rowsObservedDuringOnSend: number | undefined;
+		let observedDuringOnSend:
+			| { requestRows: number; cacheRows: number }
+			| undefined;
 
 		server.addHook("onSend", async (request, _reply, payload) => {
 			if (request.url === "/v1/chat/completions") {
-				const row = db
+				const requestRow = db
 					.prepare("SELECT COUNT(*) AS count FROM requests")
 					.get() as { count: number };
-				rowsObservedDuringOnSend = row.count;
+				const cacheRow = db
+					.prepare("SELECT COUNT(*) AS count FROM cache_entries")
+					.get() as { count: number };
+				observedDuringOnSend = {
+					requestRows: requestRow.count,
+					cacheRows: cacheRow.count,
+				};
 			}
 			return payload;
 		});
@@ -1040,7 +1217,9 @@ describe("POST /v1/chat/completions — logging lifecycle", () => {
 			});
 
 			expect(response.statusCode).toBe(200);
-			expect(rowsObservedDuringOnSend).toBe(0);
+			// Metering/cache write finish before the response is sent; durable
+			// logging (and the budget release coupled to it) follows onResponse.
+			expect(observedDuringOnSend).toEqual({ requestRows: 0, cacheRows: 1 });
 			const persisted = db
 				.prepare("SELECT COUNT(*) AS count FROM requests")
 				.get() as { count: number };
@@ -1430,6 +1609,16 @@ describe("POST /v1/chat/completions — budget circuit breaker", () => {
 		const keyId = seedApiKey(db, { budgetMicroUsdMonth: 1 });
 		seedPricing(db, "gpt-budget-reject", 1_000_000, 1_000_000);
 		const { adapter, calls } = fakeAdapter(async () => fakeChatResponse());
+		const cacheableBody: ChatRequest = {
+			model: "gpt-budget-reject",
+			messages: [{ role: "user", content: "abcd" }],
+			max_tokens: 1,
+		};
+		seedCacheEntry(
+			db,
+			cacheableBody,
+			fakeChatResponse({ model: "gpt-budget-reject" }),
+		);
 		const server = await buildTestServer({ openai: adapter });
 
 		try {
@@ -1437,11 +1626,7 @@ describe("POST /v1/chat/completions — budget circuit breaker", () => {
 				method: "POST",
 				url: "/v1/chat/completions",
 				headers: authHeaders(),
-				body: JSON.stringify({
-					model: "gpt-budget-reject",
-					messages: [{ role: "user", content: "abcd" }],
-					max_tokens: 1,
-				}),
+				body: JSON.stringify(cacheableBody),
 			});
 			expect(response.statusCode).toBe(429);
 			expect(response.json()).toEqual({
@@ -1452,6 +1637,11 @@ describe("POST /v1/chat/completions — budget circuit breaker", () => {
 				},
 			});
 			expect(calls).toHaveLength(0);
+			// A usable cache entry must remain untouched: admission occurs before
+			// cache read, not merely before provider dispatch.
+			expect(db.prepare("SELECT hit_count FROM cache_entries").get()).toEqual({
+				hit_count: 0,
+			});
 			expect(
 				db
 					.prepare(

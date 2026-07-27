@@ -181,10 +181,10 @@ export function meterStreamUsage(
 }
 
 /**
- * Meters a stream the client disconnected from before a terminal provider
- * usage report arrived.  The only output we can responsibly estimate is text
- * that has actually been emitted to the client; hidden reasoning and tool
- * arguments deliberately do not get invented here.
+ * Meters a stream that ended without a terminal provider usage report, whether
+ * from a client disconnect or a post-header provider/contract failure. The
+ * only output we can responsibly estimate is text actually emitted to the
+ * client; hidden reasoning and tool arguments deliberately do not get invented.
  */
 export function meterAbortedStream(
 	db: Database.Database,

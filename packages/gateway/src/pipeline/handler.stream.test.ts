@@ -85,10 +85,19 @@ function openTestDb(): Database.Database {
 	return db;
 }
 
-function seedApiKey(db: Database.Database): void {
+function seedApiKey(
+	db: Database.Database,
+	options: { budgetMicroUsdMonth?: number } = {},
+): void {
 	db.prepare(
-		`INSERT INTO api_keys (name, key_hash, disabled) VALUES (@name, @key_hash, 0)`,
-	).run({ name: "stream-test-key", key_hash: KEY_HASH });
+		`INSERT INTO api_keys (
+			name, key_hash, budget_micro_usd_month, disabled
+		) VALUES (@name, @key_hash, @budget_micro_usd_month, 0)`,
+	).run({
+		name: "stream-test-key",
+		key_hash: KEY_HASH,
+		budget_micro_usd_month: options.budgetMicroUsdMonth ?? 10_000_000,
+	});
 }
 
 function seedPricing(
@@ -330,6 +339,27 @@ function streamBody(model: string): string {
 		messages: [{ role: "user", content: "say hi" }],
 		stream: true,
 	});
+}
+
+function seedStreamingCacheEntry(
+	db: Database.Database,
+	request: ChatRequest,
+	response: ChatResponse,
+): void {
+	if (!response.usage) {
+		throw new Error("Streaming cache fixture requires usage.");
+	}
+	db.prepare(
+		`INSERT INTO cache_entries (
+			hash, model, response_json, usage_json, priced_cost_micro_usd, expires_at
+		) VALUES (?, ?, ?, ?, ?, '2999-01-01 00:00:00')`,
+	).run(
+		cacheKeyOf(request),
+		request.model,
+		JSON.stringify(response),
+		JSON.stringify(response.usage),
+		9,
+	);
 }
 
 /**
@@ -871,6 +901,125 @@ describe("POST /v1/chat/completions — streaming success", () => {
 			db.close();
 		}
 	});
+
+	test("logs and reconciles a cache replay reset, then retains debt if its fallback log fails", async () => {
+		const db = openTestDb();
+		seedApiKey(db, { budgetMicroUsdMonth: 3 });
+		seedPricing(db, "gpt-cache-replay-reset", 1_000_000, 2_000_000);
+		const request: ChatRequest = {
+			model: "gpt-cache-replay-reset",
+			messages: [{ role: "user", content: "abcd" }],
+			max_tokens: 1,
+			stream: true,
+		};
+		// This exceeds the response high-water mark, so the client can reset while
+		// the synthetic replay is still writing instead of after a clean finish.
+		seedStreamingCacheEntry(db, request, {
+			id: "cache-reset",
+			object: "chat.completion",
+			created: 1,
+			model: "gpt-cache-replay-reset",
+			choices: [
+				{
+					index: 0,
+					message: { role: "assistant", content: "x".repeat(2 * 1024 * 1024) },
+					finish_reason: "stop",
+				},
+			],
+			usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+		});
+		const server = await buildTestServer({});
+		const address = await server.listen({ port: 0, host: "127.0.0.1" });
+		const body = JSON.stringify(request);
+
+		const resetReplay = async (): Promise<string> =>
+			await new Promise<string>((resolve, reject) => {
+				const client = httpRequest(
+					`${address}/v1/chat/completions`,
+					{
+						method: "POST",
+						headers: {
+							...authHeaders(),
+							"content-length": Buffer.byteLength(body),
+						},
+					},
+					(response) => {
+						const requestId = response.headers["x-pg-request-id"];
+						if (typeof requestId !== "string") {
+							reject(new Error("missing request id"));
+							return;
+						}
+						response.once("data", () => {
+							client.destroy();
+							resolve(requestId);
+						});
+					},
+				);
+				client.on("error", (error: Error) => {
+					if (error.message !== "socket hang up") {
+						reject(error);
+					}
+				});
+				client.end(body);
+			});
+
+		try {
+			const firstRequestId = await resetReplay();
+			const first = await readRow(db, firstRequestId);
+			expect(first).toMatchObject({
+				cache_hit: 1,
+				streamed: 1,
+				status: "client_aborted",
+				error_code: null,
+				input_tokens: 1,
+				output_tokens: 1,
+				cost_micro_usd: 0,
+				cost_estimated: 0,
+			});
+			expect(
+				db.prepare("SELECT COUNT(*) AS count FROM requests").get(),
+			).toEqual({
+				count: 1,
+			});
+
+			// The equal reservation is released by the fallback durable log, so the
+			// next cache hit is admitted despite the key's three-micro-USD budget.
+			const admitted = await server.inject({
+				method: "POST",
+				url: "/v1/chat/completions",
+				headers: authHeaders(),
+				body,
+			});
+			expect(admitted.statusCode).toBe(200);
+			expect(admitted.headers["x-pg-cache"]).toBe("hit");
+
+			db.exec(
+				"CREATE TRIGGER fail_cache_replay_log BEFORE INSERT ON requests BEGIN SELECT RAISE(ABORT, 'cache replay log failure'); END",
+			);
+			await resetReplay();
+			await new Promise((resolve) => setTimeout(resolve, 20));
+			// The failed fallback insert writes no third row, but it turns the active
+			// reservation into debt and keeps the budget fail-closed.
+			expect(
+				db.prepare("SELECT COUNT(*) AS count FROM requests").get(),
+			).toEqual({
+				count: 2,
+			});
+			expect(
+				(
+					await server.inject({
+						method: "POST",
+						url: "/v1/chat/completions",
+						headers: authHeaders(),
+						body,
+					})
+				).statusCode,
+			).toBe(429);
+		} finally {
+			await server.close();
+			db.close();
+		}
+	});
 });
 
 describe("POST /v1/chat/completions — streaming error paths", () => {
@@ -1395,9 +1544,67 @@ describe("POST /v1/chat/completions — multi-line payload reframing (blocker 1)
 });
 
 describe("POST /v1/chat/completions — terminal ordering end-to-end (blocker 2)", () => {
+	test("estimates visible output for a missing-usage contract failure and never caches it", async () => {
+		const db = openTestDb();
+		seedApiKey(db, { budgetMicroUsdMonth: 4 });
+		seedPricing(db, "gpt-order-missing-usage", 1_000_000, 2_000_000);
+		const transcript = sseText([ROLE_OBJ, contentObj("late")]);
+		const fetch = vi.fn().mockResolvedValue(sseResponse(transcript));
+		const server = await serverWithRealOpenAi(fetch);
+		const body = JSON.stringify({
+			model: "gpt-order-missing-usage",
+			messages: [{ role: "user", content: "say hi" }],
+			max_tokens: 1,
+			stream: true,
+		});
+
+		try {
+			const response = await server.inject({
+				method: "POST",
+				url: "/v1/chat/completions",
+				headers: authHeaders(),
+				body,
+			});
+			expect(response.statusCode).toBe(200);
+			expect(response.payload).toContain("late");
+			expect(response.payload).not.toContain("[DONE]");
+			const row = await readRow(
+				db,
+				response.headers["x-pg-request-id"] as string,
+			);
+			expect(row).toMatchObject({
+				status: "provider_error",
+				error_code: "provider_error",
+				input_tokens: 2,
+				output_tokens: 1,
+				cost_micro_usd: 4,
+				cost_estimated: 1,
+			});
+			expect(
+				db.prepare("SELECT COUNT(*) AS count FROM cache_entries").get(),
+			).toEqual({ count: 0 });
+			// The estimated durable cost consumes the whole $0.000004 budget, so
+			// reconciliation cannot have treated the failed stream as zero cost.
+			expect(
+				(
+					await server.inject({
+						method: "POST",
+						url: "/v1/chat/completions",
+						headers: authHeaders(),
+						body,
+					})
+				).statusCode,
+			).toBe(429);
+			expect(fetch).toHaveBeenCalledTimes(1);
+		} finally {
+			await server.close();
+			db.close();
+		}
+	});
+
 	test("content after the terminal usage chunk fails the exchange, no [DONE] to the client", async () => {
 		const db = openTestDb();
-		seedApiKey(db);
+		seedApiKey(db, { budgetMicroUsdMonth: 4 });
 		seedPricing(db, "gpt-order-a", 1_000_000, 2_000_000);
 		const transcript = sseText([
 			ROLE_OBJ,
@@ -1406,13 +1613,19 @@ describe("POST /v1/chat/completions — terminal ordering end-to-end (blocker 2)
 		]);
 		const fetch = vi.fn().mockResolvedValue(sseResponse(transcript));
 		const server = await serverWithRealOpenAi(fetch);
+		const body = JSON.stringify({
+			model: "gpt-order-a",
+			messages: [{ role: "user", content: "say hi" }],
+			max_tokens: 1,
+			stream: true,
+		});
 
 		try {
 			const response = await server.inject({
 				method: "POST",
 				url: "/v1/chat/completions",
 				headers: authHeaders(),
-				body: streamBody("gpt-order-a"),
+				body,
 			});
 			expect(response.statusCode).toBe(200); // headers committed on the role chunk
 			expect(response.payload).not.toContain("[DONE]");
@@ -1420,7 +1633,30 @@ describe("POST /v1/chat/completions — terminal ordering end-to-end (blocker 2)
 				db,
 				response.headers["x-pg-request-id"] as string,
 			);
-			expect(row.status).toBe("provider_error");
+			expect(row).toMatchObject({
+				status: "provider_error",
+				error_code: "provider_error",
+				input_tokens: 2,
+				output_tokens: 1,
+				cost_micro_usd: 4,
+				cost_estimated: 0,
+			});
+			expect(
+				db.prepare("SELECT COUNT(*) AS count FROM cache_entries").get(),
+			).toEqual({ count: 0 });
+			// A later contract error must preserve the already-captured exact usage
+			// when reconciliation releases its reservation.
+			expect(
+				(
+					await server.inject({
+						method: "POST",
+						url: "/v1/chat/completions",
+						headers: authHeaders(),
+						body,
+					})
+				).statusCode,
+			).toBe(429);
+			expect(fetch).toHaveBeenCalledTimes(1);
 		} finally {
 			await server.close();
 			db.close();

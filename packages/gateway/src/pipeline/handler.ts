@@ -6,6 +6,7 @@ import {
 	ChatRequestSchema,
 	type ChatResponse,
 	type ChatUsage,
+	PgFeatureSchema,
 } from "@promptgate/shared";
 import type Database from "better-sqlite3";
 import type {
@@ -14,6 +15,7 @@ import type {
 	FastifyReply,
 	FastifyRequest,
 } from "fastify";
+import { z } from "zod";
 
 import { config } from "../config.js";
 import { sendError } from "../errors.js";
@@ -97,6 +99,72 @@ declare module "fastify" {
  */
 export type Clock = () => number;
 const defaultClock: Clock = () => performance.now();
+const HeaderNoCacheSchema = z.enum(["true", "false"]);
+
+interface EffectiveRequestExtensions {
+	feature: string | null;
+	noCache: boolean;
+}
+
+type HeaderFallbackResolution =
+	| { ok: true; extensions: EffectiveRequestExtensions }
+	| { ok: false; message: string };
+
+/**
+ * Resolves the Phase 3 body/header extension boundary. Body fields always win,
+ * including an explicit `pg_no_cache: false`; header values are parsed only as
+ * narrow, exact strings so a proxy/client cannot accidentally coerce a value.
+ */
+function resolveHeaderFallbacks(
+	request: FastifyRequest,
+	body: ChatRequest,
+): HeaderFallbackResolution {
+	let feature = body.pg_feature ?? null;
+	if (body.pg_feature === undefined) {
+		const headerFeature = request.headers["x-pg-feature"];
+		if (headerFeature !== undefined) {
+			const parsedFeature = PgFeatureSchema.safeParse(headerFeature);
+			if (!parsedFeature.success) {
+				return { ok: false, message: "Invalid x-pg-feature header." };
+			}
+			feature = parsedFeature.data;
+		}
+	}
+
+	let noCache = body.pg_no_cache ?? false;
+	if (body.pg_no_cache === undefined) {
+		const headerNoCache = request.headers["x-pg-no-cache"];
+		if (headerNoCache !== undefined) {
+			const parsedNoCache = HeaderNoCacheSchema.safeParse(headerNoCache);
+			if (!parsedNoCache.success) {
+				return {
+					ok: false,
+					message:
+						'Invalid x-pg-no-cache header; expected exactly "true" or "false".',
+				};
+			}
+			noCache = parsedNoCache.data === "true";
+		}
+	}
+
+	return { ok: true, extensions: { feature, noCache } };
+}
+
+/** Adds header fallbacks to the existing body shape before adapter/cache work. */
+function withEffectiveExtensions(
+	body: ChatRequest,
+	extensions: EffectiveRequestExtensions,
+): ChatRequest {
+	return {
+		...body,
+		...(body.pg_feature === undefined && extensions.feature !== null
+			? { pg_feature: extensions.feature }
+			: {}),
+		...(body.pg_no_cache === undefined && extensions.noCache
+			? { pg_no_cache: true }
+			: {}),
+	};
+}
 
 function elapsedMs(startedAtMs: number, now: Clock): number {
 	return Math.round(now() - startedAtMs);
@@ -244,10 +312,13 @@ function cacheReplayFrames(hit: CacheHit): Buffer[] {
 /** Applies cache-hit accounting and returns the replay without touching an adapter. */
 function sendCacheHit(
 	db: Database.Database,
+	request: FastifyRequest,
 	reply: FastifyReply,
 	log: PendingRequestLog,
 	body: ChatRequest,
 	hit: CacheHit,
+	now: Clock,
+	budgetGuard: BudgetGuard,
 ): FastifyReply {
 	log.cacheHit = true;
 	log.streamed = body.stream === true;
@@ -271,6 +342,17 @@ function sendCacheHit(
 		}
 		reply.header("content-type", "text/event-stream");
 		reply.header("cache-control", "no-cache");
+		// Like a live stream, a synthetic cache replay can outlive an abruptly
+		// closed response socket and skip Fastify's onResponse hook. Preserve the
+		// exact cached usage and zero cost, then use the same idempotent durable
+		// log/reconcile path as the live-stream abort handler.
+		reply.raw.once("close", () => {
+			if (!reply.raw.writableEnded) {
+				log.status = "client_aborted";
+				log.errorCode = null;
+				void logRequest(db, request, now, budgetGuard);
+			}
+		});
 		return reply.send(Readable.from(cacheReplayFrames(hit)));
 	}
 
@@ -456,8 +538,10 @@ async function* streamFrames(
 		}
 		if (usage === undefined) {
 			// Unreachable: the adapter fails closed on a missing terminal usage
-			// chunk before [DONE]. Guarded so a future adapter can't log "ok"
-			// without usage.
+			// chunk before [DONE]. A post-header contract failure still accounts for
+			// the visible output already sent, so durable budget reconciliation never
+			// treats this exchange as a zero-cost request.
+			applyStreamMeter(db, log, body, usage, emittedVisibleChars);
 			log.status = "provider_error";
 			log.errorCode = "provider_error";
 			return;
@@ -492,6 +576,10 @@ async function* streamFrames(
 			log.status = "client_aborted";
 			log.errorCode = null;
 		} else {
+			// Headers may already be committed when an adapter/contract failure is
+			// discovered. Meter exact terminal usage if it was captured before the
+			// failure; otherwise estimate only prompt plus visible emitted content.
+			applyStreamMeter(db, log, body, usage, emittedVisibleChars);
 			log.status = "provider_error";
 			log.errorCode = "provider_error";
 		}
@@ -680,11 +768,15 @@ function sendRouteError(
 
 /**
  * Registers `POST /v1/chat/completions` (BUILD_PLAYBOOK.md phase 1 step 7)
- * as an explicit, testable chain: the client-auth hook already ran on the
- * enclosing `/v1` plugin (`auth.ts`) — its pre-parsing onRequest chain adds
- * request-log initialization and rate limiting, then this handler validates,
- * resolves the provider, calls the adapter, meters, and replies. Logging is a
- * route-level `onResponse` hook so it can never add response latency.
+ * as an explicit, testable chain. Its fixed Phase 3 order is:
+ *
+ * auth → request-log init → rate limit → validate → resolve provider + pricing
+ * → [promptResolve: phase 4] → budget reserve → cache read → adapter → meter
+ * → cache write → durable log + budget reconcile.
+ *
+ * Auth runs on the enclosing `/v1` plugin (`auth.ts`); this route's
+ * pre-parsing `onRequest` chain starts the log and applies rate limiting.
+ * Durable logging remains in `onResponse` so it cannot add response latency.
  */
 export function registerChatCompletionsRoute(
 	server: FastifyInstance,
@@ -737,9 +829,23 @@ export function registerChatCompletionsRoute(
 					"invalid_request_error",
 				);
 			}
-			const body = parsed.data;
+			const headerFallbacks = resolveHeaderFallbacks(request, parsed.data);
+			if (!headerFallbacks.ok) {
+				log.status = "rejected_validation";
+				log.errorCode = "invalid_request_error";
+				return sendError(
+					reply,
+					400,
+					headerFallbacks.message,
+					"invalid_request_error",
+				);
+			}
+			const body = withEffectiveExtensions(
+				parsed.data,
+				headerFallbacks.extensions,
+			);
 			log.model = body.model;
-			log.feature = body.pg_feature ?? null;
+			log.feature = headerFallbacks.extensions.feature;
 
 			const routing = resolveProvider(db, body.model);
 			if (!routing.ok) {
@@ -762,6 +868,9 @@ export function registerChatCompletionsRoute(
 				);
 			}
 
+			// Phase 4 insertion point: prompt resolution will replace `body` with
+			// rendered messages here. Phase 3 deliberately performs no prompt DAO
+			// lookup or template work, while keeping the budget/cache boundary fixed.
 			const estimate = estimateBudgetReservation(
 				body,
 				pricing,
@@ -796,7 +905,16 @@ export function registerChatCompletionsRoute(
 					requireUsage: body.stream === true,
 				});
 				if (hit) {
-					return sendCacheHit(db, reply, log, body, hit);
+					return sendCacheHit(
+						db,
+						request,
+						reply,
+						log,
+						body,
+						hit,
+						now,
+						budgetGuard,
+					);
 				}
 			}
 
