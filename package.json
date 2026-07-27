@@ -15,6 +15,7 @@
 	"packageManager": "pnpm@10.33.0",
 	"devDependencies": {
 		"@biomejs/biome": "^2.5.4",
+		"@promptgate/evals": "workspace:*",
 		"@types/node": "^22.20.1",
 		"openai": "6.49.0",
 		"typescript": "^7.0.2",
