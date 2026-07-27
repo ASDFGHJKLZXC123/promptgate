@@ -37,6 +37,7 @@ import {
 } from "./cache.dao.js";
 import { cacheKeyOf } from "./cache-key.js";
 import { meterAbortedStream, meterStreamUsage, meterUsage } from "./meter.js";
+import { RateLimiter } from "./ratelimit.js";
 import {
 	insertRequestLog,
 	type RequestLogProvider,
@@ -655,15 +656,17 @@ function sendRouteError(
 /**
  * Registers `POST /v1/chat/completions` (BUILD_PLAYBOOK.md phase 1 step 7)
  * as an explicit, testable chain: the client-auth hook already ran on the
- * enclosing `/v1` plugin (`auth.ts`) — this route only adds body validation,
- * provider resolution, the adapter call, metering, and the reply. Logging is
- * a route-level `onResponse` hook so it can never add response latency.
+ * enclosing `/v1` plugin (`auth.ts`) — its pre-parsing onRequest chain adds
+ * request-log initialization and rate limiting, then this handler validates,
+ * resolves the provider, calls the adapter, meters, and replies. Logging is a
+ * route-level `onResponse` hook so it can never add response latency.
  */
 export function registerChatCompletionsRoute(
 	server: FastifyInstance,
 	db: Database.Database,
 	adapters: ProviderAdapterRegistry,
 	now: Clock = defaultClock,
+	rateLimiter = new RateLimiter(),
 ): void {
 	server.decorateRequest("pgRequestLog");
 	server.post(
@@ -672,6 +675,23 @@ export function registerChatCompletionsRoute(
 			bodyLimit: config.BODY_LIMIT_BYTES,
 			onRequest: async (request, reply) => {
 				initializeRequestLog(request, reply, now);
+				const log = requireRequestLog(request);
+				const rateLimit = rateLimiter.take(
+					request.ctx.apiKey.id,
+					request.ctx.apiKey.rateLimitRpm,
+				);
+				if (!rateLimit.allowed) {
+					log.status = "rejected_rate_limited";
+					log.errorCode = "rate_limited";
+					reply.header("retry-after", String(rateLimit.retryAfterSeconds));
+					return sendError(
+						reply,
+						429,
+						"Rate limit exceeded.",
+						"rate_limited",
+						"rate_limit_error",
+					);
+				}
 			},
 			errorHandler: sendRouteError,
 			onResponse: async (request) => {

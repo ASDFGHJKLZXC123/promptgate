@@ -14,6 +14,7 @@ import {
 	registerChatCompletionsRoute,
 } from "./pipeline/handler.js";
 import { registerModelsRoute } from "./pipeline/models.js";
+import { type RateLimitClock, RateLimiter } from "./pipeline/ratelimit.js";
 import { registerRequestUsageRoute } from "./pipeline/usage.js";
 import { createAnthropicAdapter } from "./providers/anthropic.js";
 import { createDeepSeekAdapter } from "./providers/deepseek.js";
@@ -35,6 +36,11 @@ export interface BuildServerOptions {
 	 * step 3). Defaults to `performance.now()`.
 	 */
 	now?: Clock;
+	/**
+	 * Separate monotonic clock for rate-limit tests. It intentionally does not
+	 * share `now`, whose scripted values drive request-latency assertions.
+	 */
+	rateLimitNow?: RateLimitClock;
 }
 
 export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
@@ -67,6 +73,7 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
 		gemini: createGeminiAdapter({ apiKey: config.GEMINI_API_KEY }),
 		deepseek: createDeepSeekAdapter({ apiKey: config.DEEPSEEK_API_KEY }),
 	};
+	const rateLimiter = new RateLimiter(options.rateLimitNow);
 
 	const server = fastify();
 
@@ -88,7 +95,13 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
 	server.register(
 		(v1Server) => {
 			registerClientAuth(v1Server, db);
-			registerChatCompletionsRoute(v1Server, db, adapters, options.now);
+			registerChatCompletionsRoute(
+				v1Server,
+				db,
+				adapters,
+				options.now,
+				rateLimiter,
+			);
 			registerModelsRoute(v1Server, db);
 			registerRequestUsageRoute(v1Server, db);
 		},

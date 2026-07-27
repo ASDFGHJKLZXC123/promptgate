@@ -114,13 +114,21 @@ function openTestDb(): Database.Database {
 	return db;
 }
 
-function seedApiKey(db: Database.Database): number {
+function seedApiKey(
+	db: Database.Database,
+	options: { name?: string; rateLimitRpm?: number } = {},
+): number {
 	const row = db
 		.prepare(
-			`INSERT INTO api_keys (name, key_hash, disabled) VALUES (@name, @key_hash, 0)
+			`INSERT INTO api_keys (name, key_hash, rate_limit_rpm, disabled)
+			 VALUES (@name, @key_hash, @rate_limit_rpm, 0)
 			 RETURNING id`,
 		)
-		.get({ name: "handler-test-key", key_hash: KEY_HASH }) as { id: number };
+		.get({
+			name: options.name ?? "handler-test-key",
+			key_hash: KEY_HASH,
+			rate_limit_rpm: options.rateLimitRpm ?? 60,
+		}) as { id: number };
 	return row.id;
 }
 
@@ -1259,6 +1267,151 @@ describe("POST /v1/chat/completions — Gemini and DeepSeek routing (BUILD_PLAYB
 			});
 			expect(geminiCalls).toHaveLength(0);
 			expect(openaiCalls).toHaveLength(0);
+		} finally {
+			await server.close();
+			db.close();
+		}
+	});
+});
+
+describe("POST /v1/chat/completions — rate limiting", () => {
+	test("rejects before cache and provider dispatch and writes a rejected audit row", async () => {
+		const db = openTestDb();
+		const keyId = seedApiKey(db, { rateLimitRpm: 1 });
+		seedPricing(db, "gpt-rate-limited", 1_000_000, 2_000_000);
+		const { adapter, calls } = fakeAdapter(async () => fakeChatResponse());
+		const cachedRequest: ChatRequest = {
+			model: "gpt-rate-limited",
+			messages: [{ role: "user", content: "cached" }],
+		};
+		seedCacheEntry(
+			db,
+			cachedRequest,
+			fakeChatResponse({ model: "gpt-rate-limited" }),
+		);
+		const server = await buildTestServer({ openai: adapter });
+
+		try {
+			const admitted = await server.inject({
+				method: "POST",
+				url: "/v1/chat/completions",
+				headers: authHeaders(),
+				body: JSON.stringify(cachedRequest),
+			});
+			expect(admitted.statusCode).toBe(200);
+			expect(admitted.headers["x-pg-cache"]).toBe("hit");
+
+			const rejected = await server.inject({
+				method: "POST",
+				url: "/v1/chat/completions",
+				headers: authHeaders(),
+				// The same exact cacheable request is denied before it can increment
+				// cache metadata or reach an adapter.
+				body: JSON.stringify(cachedRequest),
+			});
+
+			expect(rejected.statusCode).toBe(429);
+			expect(rejected.headers["retry-after"]).toBe("60");
+			expect(rejected.json()).toEqual({
+				error: {
+					message: "Rate limit exceeded.",
+					type: "rate_limit_error",
+					code: "rate_limited",
+				},
+			});
+			const malformed = await server.inject({
+				method: "POST",
+				url: "/v1/chat/completions",
+				headers: authHeaders(),
+				// This would fail Fastify parsing if the limiter did not run in
+				// onRequest before body processing.
+				body: '{"model":',
+			});
+			expect(malformed.statusCode).toBe(429);
+			expect(calls).toHaveLength(0);
+			expect(db.prepare("SELECT hit_count FROM cache_entries").get()).toEqual({
+				hit_count: 1,
+			});
+
+			const requestId = rejected.headers["x-pg-request-id"] as string;
+			const row = db
+				.prepare(
+					`SELECT api_key_id, provider, model, cache_hit, streamed,
+					 input_tokens, output_tokens, cost_micro_usd, cost_estimated,
+					 status, error_code
+					 FROM requests WHERE request_id = ?`,
+				)
+				.get(requestId) as {
+				api_key_id: number;
+				provider: string;
+				model: string;
+				cache_hit: number;
+				streamed: number;
+				input_tokens: number | null;
+				output_tokens: number | null;
+				cost_micro_usd: number | null;
+				cost_estimated: number;
+				status: string;
+				error_code: string | null;
+			};
+			expect(row).toEqual({
+				api_key_id: keyId,
+				provider: "unknown",
+				model: "unknown",
+				cache_hit: 0,
+				streamed: 0,
+				input_tokens: null,
+				output_tokens: null,
+				cost_micro_usd: null,
+				cost_estimated: 0,
+				status: "rejected_rate_limited",
+				error_code: "rate_limited",
+			});
+		} finally {
+			await server.close();
+			db.close();
+		}
+	});
+
+	test("uses an admin PATCH rate_limit_rpm on the next request", async () => {
+		const db = openTestDb();
+		const keyId = seedApiKey(db);
+		seedPricing(db, "gpt-rate-update", 1_000_000, 2_000_000);
+		const { adapter, calls } = fakeAdapter(async () => fakeChatResponse());
+		const server = await buildTestServer({ openai: adapter });
+
+		const request = () =>
+			server.inject({
+				method: "POST",
+				url: "/v1/chat/completions",
+				headers: authHeaders(),
+				body: JSON.stringify({
+					model: "gpt-rate-update",
+					messages: [{ role: "user", content: "rate me" }],
+					pg_no_cache: true,
+				}),
+			});
+
+		try {
+			expect((await request()).statusCode).toBe(200);
+			const patch = await server.inject({
+				method: "PATCH",
+				url: `/admin/api/keys/${keyId}`,
+				headers: {
+					"x-admin-token": ADMIN_TOKEN,
+					"content-type": "application/json",
+				},
+				body: JSON.stringify({ rate_limit_rpm: 2 }),
+			});
+			expect(patch.statusCode).toBe(200);
+
+			// The existing 60-RPM bucket is reconfigured, not recreated: the next
+			// calls consume the clamped two-token capacity and the third is
+			// immediately rejected at the patched rate.
+			expect((await request()).statusCode).toBe(200);
+			expect((await request()).statusCode).toBe(200);
+			expect((await request()).statusCode).toBe(429);
+			expect(calls).toHaveLength(3);
 		} finally {
 			await server.close();
 			db.close();
