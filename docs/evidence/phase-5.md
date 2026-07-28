@@ -2,11 +2,12 @@
 
 Date: 2026-07-28
 
-Status: **incomplete — completed baseline run ID 1 remains useful historical
-evidence, but it is not comparable with the owner-approved Terra-judged gate;
-fresh paired good and degraded runs remain pending**. Phase 5 remains
-verify-pending. The degraded prompt and degraded command have not been created
-or run.
+Status: **incomplete — the fresh Terra-judged good Verify stopped at
+infrastructure exit 2 because OpenAI rejected the rotated key with HTTP 401;
+no Terra judgment or new eval run persisted**. Completed baseline run ID 1
+remains useful historical Gemini-judged evidence but is not comparable with
+the owner-approved Terra gate. Phase 5 remains verify-pending. The degraded
+prompt and degraded command have not been created or run.
 
 ## Prior committed Gemini-judge attempt
 
@@ -190,13 +191,71 @@ unchanged. The degraded gate also requires a fresh pair. No provider, Docker,
 admin/database, dataset, Phase 6, or live history operation occurred while
 implementing this amendment.
 
+## Terra-judge live attempt — OpenAI authentication blocker
+
+The good Verify started from clean commit
+`d00572418c9ac35e4db39953ea389179933e5d7d`. The gateway image was rebuilt and
+the container recreated so it received the owner-confirmed rotated key. Docker
+reported healthy, `GET /healthz` returned HTTP 200 with `{"ok":true}`, and
+presence-only checks confirmed `OPENAI_API_KEY`, `DEEPSEEK_API_KEY`, and
+`ADMIN_TOKEN` inside the container.
+
+The checked-in loader returned the unchanged dataset hash
+`407c72cc4e9699ccb6aee1a3221e9da348b364ef4851a7f3a07e810b6bf8bef5`,
+50 cases, seven rubrics, sole target `deepseek-v4-flash`, and threshold 0.8.
+Both `safety_screen` labels remained at prompt ID 3/version 1, and
+`judge_rubric_v1@1` remained present. Current pricing rows named DeepSeek as
+the target provider and OpenAI as Terra's provider.
+
+Disposable key ID 20 was created with exactly 1,000,000 micro-USD monthly
+budget and RPM 1000. The live command was:
+
+```bash
+./node_modules/.bin/pg-eval run --dataset safety_screening \
+  --prompt safety_screen@candidate --baseline prod \
+  --gateway http://localhost:8787 --key "$KEY" --admin-token "$ADMIN_TOKEN" \
+  --min-request-interval-ms 15000
+```
+
+It returned:
+
+```console
+Rubric evaluator failed.
+PG_EVAL_EXIT=2
+DISPOSABLE_KEY_CLEANUP id=20 disabled=true month_to_date_spend_micro_usd=100
+```
+
+The durable request rows were:
+
+```console
+id   provider  model              status          input  output  cost_micro_usd  total_ms
+163  deepseek  deepseek-v4-flash  ok              399    347     100             4518
+164  openai    gpt-5.6-terra      provider_error  —      —       —               268
+```
+
+The sanitized gateway/eval contract does not persist an upstream response
+body. A single no-generation `GET https://api.openai.com/v1/models` check with
+the same rotated credential returned:
+
+```json
+{"http_status":401,"content_type":"application/json","model_found":false,"model_count":null}
+```
+
+This proves that OpenAI rejected the credential as unauthorized. It does not
+establish whether this key would otherwise have access to Terra or whether the
+Terra request options are accepted. No retry was made. No new `eval_runs` or
+`eval_results` row persisted: database totals remain the earlier one run and
+50 results, and both safety labels remain at v1. Key 20 was disabled after two
+gateway requests and 100 micro-USD. No degraded prompt, Gemini call, history
+reuse, or Phase 6 work occurred.
+
 ## Remaining live work
 
-The owner confirmed that the OpenAI key exposed locally during an earlier
-preflight was rotated before this amendment's live call. Credential presence
-and Terra activation will be checked without printing the value as part of the
-live Verify. Gemini daily quota is no longer a blocker for the active Phase 5
-gate.
+Replace `OPENAI_API_KEY` in the gitignored `.env` with an active key that
+OpenAI authorizes. After the owner confirms replacement, rebuild/recreate the
+gateway, create a new disposable $1 key, and rerun the same fresh paired
+command. Do not reuse disabled key 20 or the partial request sequence. Gemini
+daily quota is no longer a blocker for the active Phase 5 gate.
 
 After a fresh good pair completes with exit 0 and persisted evidence, the
 deliberately degraded candidate must be created and run as another fresh pair;
@@ -275,4 +334,5 @@ shell-incompatible OpenAI entry and emitted that OpenAI value in a local
 command error. It was not committed, persisted in this evidence, or sent to a
 provider. All subsequent commands used Node's dotenv loader and presence-only
 output. The owner confirmed that the exposed key was rotated before this
-amendment's live Terra call.
+amendment's live Terra call, but OpenAI returned HTTP 401 for the replacement.
+The replacement value was not printed or persisted in this evidence.
