@@ -27,7 +27,6 @@ describe("pg-eval CLI scaffold", () => {
 				"safety_screen@candidate",
 				"--baseline",
 				"prod",
-				"--baseline-from-history",
 				"--gateway",
 				"http://localhost:8787",
 				"--key",
@@ -46,13 +45,35 @@ describe("pg-eval CLI scaffold", () => {
 				"admin-token": "admin-test",
 				"allow-cache": true,
 				baseline: "prod",
-				"baseline-from-history": true,
 				dataset: "safety_screening",
 				gateway: "http://localhost:8787",
 				key: "pg-test",
 				"max-score-drop": "0.05",
 				"min-request-interval-ms": "15000",
 				prompt: "safety_screen@candidate",
+			},
+		});
+	});
+
+	test("retains explicit historical-baseline parsing for non-gate callers", () => {
+		expect(
+			parseCli([
+				"run",
+				"--dataset",
+				"fixture",
+				"--prompt",
+				"safety@candidate",
+				"--baseline",
+				"prod",
+				"--baseline-from-history",
+			]),
+		).toEqual({
+			command: "run",
+			options: {
+				baseline: "prod",
+				"baseline-from-history": true,
+				dataset: "fixture",
+				prompt: "safety@candidate",
 			},
 		});
 	});
@@ -135,7 +156,7 @@ describe("pg-eval CLI scaffold", () => {
 		);
 	});
 
-	test("forwards an explicit request-pace flag to the runner", async () => {
+	test("forwards the paired Verify baseline and request pace without historical reuse", async () => {
 		const { io } = createIo();
 		const runEvaluation = vi.fn().mockResolvedValue({
 			exitCode: 0,
@@ -167,7 +188,6 @@ describe("pg-eval CLI scaffold", () => {
 					"safety_screen@candidate",
 					"--baseline",
 					"prod",
-					"--baseline-from-history",
 					"--min-request-interval-ms",
 					"15000",
 				],
@@ -179,7 +199,7 @@ describe("pg-eval CLI scaffold", () => {
 		expect(runEvaluation).toHaveBeenCalledWith(
 			expect.objectContaining({
 				baseline: "prod",
-				baselineFromHistory: true,
+				baselineFromHistory: false,
 				minRequestIntervalMs: 15_000,
 			}),
 			expect.any(Object),

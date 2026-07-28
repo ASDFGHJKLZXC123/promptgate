@@ -11,10 +11,10 @@ export const PHASE_5_TARGET_MODELS = Object.freeze([
 	"deepseek-v4-flash",
 ] as const);
 export type Phase5TargetModel = (typeof PHASE_5_TARGET_MODELS)[number];
-export type Phase5JudgeModel = "gemini-2.5-flash";
+export type Phase5JudgeModel = "gpt-5.6-terra";
 
 export const JUDGE_MODEL_BY_TARGET = Object.freeze({
-	"deepseek-v4-flash": "gemini-2.5-flash",
+	"deepseek-v4-flash": "gpt-5.6-terra",
 } satisfies Record<Phase5TargetModel, Phase5JudgeModel>);
 export const JUDGE_PROMPT_REF = "judge_rubric_v1@1" as const;
 export const MAX_JUDGE_RATIONALE_LENGTH = 1_000;
@@ -111,6 +111,7 @@ export function createGatewayRubricEvaluator(
 				model: judgeModel,
 				prompt: JUDGE_PROMPT_REF,
 				vars: judgeVars(input),
+				reasoningEffort: "high",
 				responseFormat: { type: "json_object" },
 			});
 		} catch (error) {

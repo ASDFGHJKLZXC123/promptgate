@@ -367,6 +367,7 @@ describe("eval runner", () => {
 		for (const changed of [
 			{ ...dataset, prompts: ["other@candidate"] },
 			{ ...dataset, providers: ["gemini-2.5-flash"] },
+			{ ...dataset, providers: ["gpt-5.6-terra"] },
 			{ ...dataset, providers: ["gemini-2.5-flash", "gemini-2.5-flash"] },
 			{ ...dataset, providers: ["deepseek-v4-flash", "gemini-2.5-flash"] },
 			{ ...dataset, providers: ["gpt-5.6-luna"] },
@@ -422,6 +423,7 @@ describe("eval runner", () => {
 			"safety@2",
 		]);
 		expect(admin.createRun).toHaveBeenCalledTimes(2);
+		expect(admin.historicalRuns).not.toHaveBeenCalled();
 		expect(admin.createRun.mock.calls[0]?.[0]).toMatchObject({
 			prompt_version: 1,
 			dataset_id: 4,
@@ -582,7 +584,7 @@ describe("eval runner", () => {
 			"safety@2",
 			"safety@2",
 		]);
-		expect(callPrompts.get("gemini-2.5-flash")).toEqual([
+		expect(callPrompts.get("gpt-5.6-terra")).toEqual([
 			"judge_rubric_v1@1",
 			"judge_rubric_v1@1",
 			"judge_rubric_v1@1",

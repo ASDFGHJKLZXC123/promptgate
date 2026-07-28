@@ -63,7 +63,7 @@ describe("gateway rubric judge", () => {
 		});
 		expect(gateway.complete).toHaveBeenCalledTimes(1);
 		expect(gateway.complete).toHaveBeenCalledWith({
-			model: "gemini-2.5-flash",
+			model: "gpt-5.6-terra",
 			prompt: JUDGE_PROMPT_REF,
 			vars: {
 				payload: JSON.stringify({
@@ -75,6 +75,7 @@ describe("gateway rubric judge", () => {
 					},
 				}),
 			},
+			reasoningEffort: "high",
 			responseFormat: { type: "json_object" },
 		});
 	});
@@ -112,7 +113,7 @@ describe("gateway rubric judge", () => {
 					id: "chatcmpl-judge",
 					object: "chat.completion",
 					created: 1,
-					model: "gemini-2.5-flash",
+					model: "gpt-5.6-terra",
 					choices: [
 						{
 							index: 0,
@@ -157,7 +158,7 @@ describe("gateway rubric judge", () => {
 			"https://gateway.example/base/v1/chat/completions",
 		);
 		expect(JSON.parse(String(init?.body))).toEqual({
-			model: "gemini-2.5-flash",
+			model: "gpt-5.6-terra",
 			messages: [],
 			stream: false,
 			temperature: 0,
@@ -174,6 +175,7 @@ describe("gateway rubric judge", () => {
 			},
 			pg_feature: "eval",
 			pg_no_cache: true,
+			reasoning_effort: "high",
 			response_format: { type: "json_object" },
 		});
 	});
@@ -246,11 +248,11 @@ describe("gateway rubric judge", () => {
 });
 
 describe("Phase 5 cross-provider judge selection", () => {
-	test("maps the sole DeepSeek target to its independent Gemini judge", () => {
+	test("maps the sole DeepSeek target to its independent Terra judge", () => {
 		expect(Object.isFrozen(PHASE_5_TARGET_MODELS)).toBe(true);
 		expect(Object.isFrozen(JUDGE_MODEL_BY_TARGET)).toBe(true);
 		expect(JUDGE_MODEL_BY_TARGET).toEqual({
-			"deepseek-v4-flash": "gemini-2.5-flash",
+			"deepseek-v4-flash": "gpt-5.6-terra",
 		});
 		for (const [target, judge] of Object.entries(JUDGE_MODEL_BY_TARGET)) {
 			expect(judgeModelForTarget(target)).toBe(judge);

@@ -2,13 +2,13 @@
 
 Date: 2026-07-28
 
-Status: **incomplete — completed baseline run ID 1 is now owner-accepted as
-current live baseline evidence under the hardened persisted-baseline
-amendment; the good and degraded candidates remain pending**. Phase 5 remains
+Status: **incomplete — completed baseline run ID 1 remains useful historical
+evidence, but it is not comparable with the owner-approved Terra-judged gate;
+fresh paired good and degraded runs remain pending**. Phase 5 remains
 verify-pending. The degraded prompt and degraded command have not been created
 or run.
 
-## Committed gate
+## Prior committed Gemini-judge attempt
 
 The live attempt used the clean committed amendment:
 
@@ -20,7 +20,7 @@ $ git status --short
 # no output
 ```
 
-The checked-in Phase 5 matrix was unchanged:
+The then-checked-in Phase 5 matrix was unchanged:
 
 - target: exactly `deepseek-v4-flash`;
 - independent judge: exactly `gemini-2.5-flash`;
@@ -127,7 +127,7 @@ safety_screen  candidate  1
 safety_screen  prod       1
 ```
 
-## Owner-approved persisted-baseline path
+## Owner-approved persisted-baseline path (historical; superseded)
 
 On 2026-07-28, the project owner accepted completed baseline run ID 1 from the
 live attempt at code HEAD `a77b9cf` as the current Phase 5 baseline evidence.
@@ -168,15 +168,42 @@ The Phase 6 fresh-database paired four-provider gate is unchanged.
 No provider call, Docker operation, admin/database mutation, degraded prompt
 creation, or Phase 6 work occurred while implementing this amendment.
 
-## Remaining blocker
+## Superseding Terra-judge comparability amendment
 
-The good candidate awaits a fresh Gemini quota day. After it completes with
-exit 0 and persisted evidence, the deliberately degraded candidate must be
-created and run on a separate fresh quota day with the same hardened history
-path; it must return quality exit 1 with the named failing cases. Checkpoint B1
-then B2 remain ordered after the completed live Verify.
+The owner later superseded the live use of history for Phase 5 because run ID 1
+was Gemini-judged and `eval_runs` does not persist judge identity. The hardened
+`--baseline-from-history` feature remains available to general callers, but the
+active gate uses a fresh paired run and omits that flag:
 
-The offline persisted-baseline amendment gate is green:
+```bash
+./node_modules/.bin/pg-eval run --dataset safety_screening \
+  --prompt safety_screen@candidate --baseline prod \
+  --gateway http://localhost:8787 --key "$KEY" --admin-token "$ADMIN_TOKEN" \
+  --min-request-interval-ms 15000
+```
+
+The target remains `deepseek-v4-flash`; the independent judge is
+`gpt-5.6-terra` at temperature 0 and high reasoning effort with the frozen
+JSON-object rubric prompt and no cache. The 50 cases, seven rubrics, retry and
+self-judge prohibitions, $1 key, persistence, table, and exit contracts remain
+unchanged. The degraded gate also requires a fresh pair. No provider, Docker,
+admin/database, dataset, Phase 6, or live history operation occurred while
+implementing this amendment.
+
+## Remaining live work
+
+The owner confirmed that the OpenAI key exposed locally during an earlier
+preflight was rotated before this amendment's live call. Credential presence
+and Terra activation will be checked without printing the value as part of the
+live Verify. Gemini daily quota is no longer a blocker for the active Phase 5
+gate.
+
+After a fresh good pair completes with exit 0 and persisted evidence, the
+deliberately degraded candidate must be created and run as another fresh pair;
+it must return quality exit 1 with the named failing cases. Checkpoint B1 then
+B2 remain ordered after the completed live Verify.
+
+The prior persisted-baseline amendment gate was green:
 
 ```console
 $ pnpm exec vitest run packages/evals/src/runner.test.ts \
@@ -199,14 +226,47 @@ packages/evals build: Done
 packages/gateway build: Done
 ```
 
-The actual read-only history endpoint returned run ID 1 with dataset hash
-`407c72cc4e9699ccb6aee1a3221e9da348b364ef4851a7f3a07e810b6bf8bef5`,
+The focused Terra amendment gate is also green:
+
+```console
+$ pnpm --filter @promptgate/evals build
+packages/evals build: Done
+
+$ pnpm exec vitest run packages/evals/src/judge.test.ts \
+    packages/evals/src/runner.test.ts packages/evals/src/runner.meta.test.ts \
+    packages/evals/src/cli.test.ts packages/evals/src/gateway-client.test.ts
+Test Files  5 passed (5)
+Tests       79 passed (79)
+
+$ pnpm lint
+Checked 147 files. No fixes applied.
+
+$ pnpm test
+Test Files  53 passed (53)
+Tests       719 passed (719)
+
+$ pnpm build
+Scope: 4 of 5 workspace projects
+packages/dashboard build: Done
+packages/shared build: Done
+packages/evals build: Done
+packages/gateway build: Done
+```
+
+GPT-5.6 Sol / xhigh independently audited the completed amendment, required
+four stale active-document references to be corrected, and returned `APPROVE`
+after verifying those corrections. Diff, secret, no-`any`, dataset, gateway,
+schema, CI, and Phase 6 scope checks were clean.
+
+The actual read-only history endpoint previously returned run ID 1 with dataset
+hash `407c72cc4e9699ccb6aee1a3221e9da348b364ef4851a7f3a07e810b6bf8bef5`,
 prompt ID 3/ref `safety_screen@prod`/version 1,
 `deepseek-v4-flash`, and 50 cases. Independently loading the checked-in dataset
 returned the same hash, 50 cases, one DeepSeek target, and seven rubric cases.
 GPT-5.6 Sol / xhigh independently passed 64 focused tests and the eval strict
 build, required one test-discrimination correction, and returned final
-`APPROVE` after that correction.
+`APPROVE` after that correction. That evidence remains historically valid but
+is not used as the active Terra comparison baseline.
 
 ## Secret-handling note
 
@@ -214,4 +274,5 @@ During preflight, shell-sourcing the gitignored `.env` encountered a
 shell-incompatible OpenAI entry and emitted that OpenAI value in a local
 command error. It was not committed, persisted in this evidence, or sent to a
 provider. All subsequent commands used Node's dotenv loader and presence-only
-output. The exposed OpenAI key must be rotated before any OpenAI live call.
+output. The owner confirmed that the exposed key was rotated before this
+amendment's live Terra call.

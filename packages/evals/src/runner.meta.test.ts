@@ -195,7 +195,7 @@ function cliRuntime(
 }
 
 describe("Phase 5 eval-of-evals regression", () => {
-	test("persists exact DeepSeek target and Gemini judge results, costs, markdown, and warnings", async () => {
+	test("persists exact DeepSeek target and Terra judge results, costs, markdown, and warnings", async () => {
 		const { deps, calls, persisted } = createFakeDependencies();
 		const result = await runEvaluation(
 			{ dataset: "meta-eval", prompt: "safety@candidate", baseline: "prod" },
@@ -213,18 +213,22 @@ describe("Phase 5 eval-of-evals regression", () => {
 			warnings: ["fixture warning"],
 		});
 		expect(calls).toHaveBeenCalledTimes(8);
-		expect(calls.mock.calls.map(([call]) => [call.model, call.prompt])).toEqual(
-			[
-				["deepseek-v4-flash", "safety@1"],
-				["gemini-2.5-flash", JUDGE_PROMPT_REF],
-				["deepseek-v4-flash", "safety@1"],
-				["gemini-2.5-flash", JUDGE_PROMPT_REF],
-				["deepseek-v4-flash", "safety@2"],
-				["gemini-2.5-flash", JUDGE_PROMPT_REF],
-				["deepseek-v4-flash", "safety@2"],
-				["gemini-2.5-flash", JUDGE_PROMPT_REF],
-			],
-		);
+		expect(
+			calls.mock.calls.map(([call]) => [
+				call.model,
+				call.prompt,
+				call.reasoningEffort,
+			]),
+		).toEqual([
+			["deepseek-v4-flash", "safety@1", undefined],
+			["gpt-5.6-terra", JUDGE_PROMPT_REF, "high"],
+			["deepseek-v4-flash", "safety@1", undefined],
+			["gpt-5.6-terra", JUDGE_PROMPT_REF, "high"],
+			["deepseek-v4-flash", "safety@2", undefined],
+			["gpt-5.6-terra", JUDGE_PROMPT_REF, "high"],
+			["deepseek-v4-flash", "safety@2", undefined],
+			["gpt-5.6-terra", JUDGE_PROMPT_REF, "high"],
+		]);
 		expect(persisted).toHaveLength(2);
 		expect(
 			persisted.map((run) => ({
