@@ -2,9 +2,11 @@
 
 Date: 2026-07-28
 
-Status: **incomplete — the literal good paired command returned infrastructure
-exit 2 during a Gemini rubric call**. Phase 5 remains verify-pending. The
-degraded prompt and degraded command have not been created or run.
+Status: **incomplete — completed baseline run ID 1 is now owner-accepted as
+current live baseline evidence under the hardened persisted-baseline
+amendment; the good and degraded candidates remain pending**. Phase 5 remains
+verify-pending. The degraded prompt and degraded command have not been created
+or run.
 
 ## Committed gate
 
@@ -125,49 +127,86 @@ safety_screen  candidate  1
 safety_screen  prod       1
 ```
 
-## Current blocker
+## Owner-approved persisted-baseline path
 
-The paired good command can require 14 Gemini judgments. On this new Pacific
-quota day, ten Gemini judgments succeeded and the next one failed despite the
-approved pace. Re-running the unchanged command today would consume more
-provider traffic without producing valid completion evidence, so no retry was
-made.
+On 2026-07-28, the project owner accepted completed baseline run ID 1 from the
+live attempt at code HEAD `a77b9cf` as the current Phase 5 baseline evidence.
+GPT-5.6 Sol / xhigh had independently verified that row against the current
+gate artifacts:
 
-Completion now requires either a provider path confirmed to support all 14
-independent judgments or a separately approved gate amendment. A dedicated
-Google project or confirmed quota increase is the zero-contract-change path.
+- exact frozen safety-screening dataset hash;
+- `safety_screen@prod`, prompt ID 3/version 1;
+- exact target model `deepseek-v4-flash`;
+- 50 persisted results, 50 passes, and score 1.0;
+- all seven rubric scores at 1.0.
 
-GPT-5.6 Sol / xhigh independently audited the captured artifacts and returned
-the same blocked verdict without overclaiming an upstream 429/RPD cause. It
-confirmed that baseline run ID 1 is an exact current-HEAD baseline with the
-current dataset hash, `safety_screen@prod` prompt ID 3/version 1,
-`deepseek-v4-flash`, 50 results, 50 passes, and all seven rubric scores at
-1.0.
+The approved runtime path is fail-closed. Before dataset upsert, provider
+traffic, or any admin mutation, a history response must validate as persisted
+run data and contain an exact row matching the current dataset slug and
+64-hex hash, frozen baseline prompt ID/ref/version, target model, and current
+50-case count. A malformed response or no exact row is a sanitized
+infrastructure exit 2 with no provider/admin mutation side effects.
 
-The audit's smallest in-repo recommendation is a human-approved
-persisted-baseline amendment: harden historical matching to require the frozen
-dataset hash, prompt ID/ref/version, model, and 50-case count, then reuse run
-ID 1 for the remaining good candidate. That would reduce each remaining
-command to at most seven Gemini judgments. Baseline history is not authorized
-by the current literal gate, so it will not be used without that amendment.
-Changing to an OpenAI judge would also require an amendment and key rotation;
-rubric removal, rubric batching, and self-judging are not authorized
-substitutes.
+The two remaining live commands retain the baseline label, direct binary,
+15-second pace, no-cache/no-retry policy, and disposable $1 key contract while
+adding the approved history flag:
 
-The degraded version has not been created, checkpoint B1/B2 have not started,
-and Phase 6 remains untouched.
+```bash
+./node_modules/.bin/pg-eval run --dataset safety_screening \
+  --prompt safety_screen@candidate --baseline prod --baseline-from-history \
+  --gateway http://localhost:8787 --key "$KEY" --admin-token "$ADMIN_TOKEN" \
+  --min-request-interval-ms 15000
+```
 
-After this evidence and `PROGRESS.md` were drafted, the required local gate
-remained green:
+Only the candidate is executed and atomically persisted. The stopped partial
+candidate from the original attempt has no `eval_runs` row and is never reused;
+even candidate-ref history is rejected as a baseline mismatch. Each remaining
+command can consume at most seven Gemini rubric judgments. The good and
+deliberately degraded candidates must run on separate fresh Gemini quota days.
+The Phase 6 fresh-database paired four-provider gate is unchanged.
+
+No provider call, Docker operation, admin/database mutation, degraded prompt
+creation, or Phase 6 work occurred while implementing this amendment.
+
+## Remaining blocker
+
+The good candidate awaits a fresh Gemini quota day. After it completes with
+exit 0 and persisted evidence, the deliberately degraded candidate must be
+created and run on a separate fresh quota day with the same hardened history
+path; it must return quality exit 1 with the named failing cases. Checkpoint B1
+then B2 remain ordered after the completed live Verify.
+
+The offline persisted-baseline amendment gate is green:
 
 ```console
+$ pnpm exec vitest run packages/evals/src/runner.test.ts \
+    packages/evals/src/runner.meta.test.ts packages/evals/src/cli.test.ts
+Test Files  3 passed (3)
+Tests       43 passed (43)
+
 $ pnpm lint
 Checked 147 files. No fixes applied.
 
 $ pnpm test
 Test Files  53 passed (53)
-Tests       717 passed (717)
+Tests       718 passed (718)
+
+$ pnpm build
+Scope: 4 of 5 workspace projects
+packages/dashboard build: Done
+packages/shared build: Done
+packages/evals build: Done
+packages/gateway build: Done
 ```
+
+The actual read-only history endpoint returned run ID 1 with dataset hash
+`407c72cc4e9699ccb6aee1a3221e9da348b364ef4851a7f3a07e810b6bf8bef5`,
+prompt ID 3/ref `safety_screen@prod`/version 1,
+`deepseek-v4-flash`, and 50 cases. Independently loading the checked-in dataset
+returned the same hash, 50 cases, one DeepSeek target, and seven rubric cases.
+GPT-5.6 Sol / xhigh independently passed 64 focused tests and the eval strict
+build, required one test-discrimination correction, and returned final
+`APPROVE` after that correction.
 
 ## Secret-handling note
 

@@ -27,6 +27,7 @@ describe("pg-eval CLI scaffold", () => {
 				"safety_screen@candidate",
 				"--baseline",
 				"prod",
+				"--baseline-from-history",
 				"--gateway",
 				"http://localhost:8787",
 				"--key",
@@ -45,6 +46,7 @@ describe("pg-eval CLI scaffold", () => {
 				"admin-token": "admin-test",
 				"allow-cache": true,
 				baseline: "prod",
+				"baseline-from-history": true,
 				dataset: "safety_screening",
 				gateway: "http://localhost:8787",
 				key: "pg-test",
@@ -163,6 +165,9 @@ describe("pg-eval CLI scaffold", () => {
 					"safety_screening",
 					"--prompt",
 					"safety_screen@candidate",
+					"--baseline",
+					"prod",
+					"--baseline-from-history",
 					"--min-request-interval-ms",
 					"15000",
 				],
@@ -172,7 +177,11 @@ describe("pg-eval CLI scaffold", () => {
 			),
 		).resolves.toBe(0);
 		expect(runEvaluation).toHaveBeenCalledWith(
-			expect.objectContaining({ minRequestIntervalMs: 15_000 }),
+			expect.objectContaining({
+				baseline: "prod",
+				baselineFromHistory: true,
+				minRequestIntervalMs: 15_000,
+			}),
 			expect.any(Object),
 		);
 	});

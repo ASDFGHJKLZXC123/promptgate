@@ -67,9 +67,14 @@ interface ModelResult {
 const HistoricalRunsSchema = z.array(
 	z
 		.object({
+			id: z.number().int().positive().safe(),
+			dataset_slug: z.string().min(1),
 			model: z.string().min(1),
-			dataset_hash: z.string().min(1),
+			dataset_hash: z.string().regex(/^[a-fA-F0-9]{64}$/),
+			prompt_id: z.number().int().positive().safe(),
+			prompt_version: z.number().int().positive().safe(),
 			prompt_ref: z.string().min(1),
+			cases_total: z.number().int().positive().safe(),
 			score_avg: z.number().finite().min(0).max(1).nullable(),
 		})
 		.passthrough(),
@@ -279,9 +284,13 @@ export async function runEvaluation(
 				throw new EvalRunError("Historical baseline response was invalid.");
 			const match = history.data.find(
 				(run) =>
+					run.dataset_slug === slug &&
 					run.dataset_hash === dataset.datasetHash &&
+					run.prompt_id === baseline.id &&
+					run.prompt_version === baseline.version &&
 					run.prompt_ref === baseline.ref &&
-					run.model === model,
+					run.model === model &&
+					run.cases_total === dataset.tests.length,
 			);
 			if (!match) throw new EvalRunError("Historical baseline is missing.");
 			historyScores.set(model, match.score_avg);

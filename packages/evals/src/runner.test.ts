@@ -5,9 +5,11 @@ import { describe, expect, test, vi } from "vitest";
 
 import { datasetPath, runEvaluation } from "./runner.js";
 
+const DATASET_HASH = "a".repeat(64);
+
 const dataset = {
 	path: "/tmp/safety.yaml",
-	datasetHash: "hash",
+	datasetHash: DATASET_HASH,
 	description: "Safety",
 	prompts: ["safety@candidate"],
 	providers: ["deepseek-v4-flash"],
@@ -193,25 +195,33 @@ describe("eval runner", () => {
 			}),
 			historicalRuns: vi.fn().mockImplementation(async () => {
 				order.push("history");
+				const exactHistory = {
+					id: 9,
+					dataset_slug: "safety",
+					dataset_hash: DATASET_HASH,
+					prompt_id: 1,
+					prompt_version: 1,
+					prompt_ref: "safety@prod",
+					model: "deepseek-v4-flash",
+					cases_total: 1,
+					score_avg: 0.9,
+				};
 				return [
 					{
-						dataset_hash: "newer-other-hash",
-						prompt_ref: "safety@prod",
-						model: "gemini-2.5-flash",
-						score_avg: 0.99,
+						...exactHistory,
+						id: 15,
+						dataset_hash: "b".repeat(64),
 					},
 					{
-						dataset_hash: "hash",
-						prompt_ref: "safety@prod",
-						model: "gemini-2.5-flash",
-						score_avg: 0.9,
+						...exactHistory,
+						id: 13,
+						prompt_version: 2,
 					},
-					{
-						dataset_hash: "hash",
-						prompt_ref: "safety@prod",
-						model: "deepseek-v4-flash",
-						score_avg: 0.9,
-					},
+					{ ...exactHistory, id: 12, prompt_ref: "safety@candidate" },
+					{ ...exactHistory, id: 11, model: "gemini-2.5-flash" },
+					{ ...exactHistory, id: 10, cases_total: 2 },
+					exactHistory,
+					{ ...exactHistory, id: 8, score_avg: 1 },
 				];
 			}),
 		};
@@ -233,9 +243,78 @@ describe("eval runner", () => {
 		).resolves.toMatchObject({ exitCode: 0 });
 		expect(order[0]).toBe("history");
 		expect(order).toEqual(["history", "upsert", "persist"]);
+		expect(gateway.complete.mock.calls.map(([call]) => call.prompt)).toEqual([
+			"safety@2",
+			"judge_rubric_v1@1",
+		]);
+		expect(admin.createRun).toHaveBeenCalledTimes(1);
+		const historyQuery = admin.historicalRuns.mock
+			.calls[0]?.[0] as URLSearchParams;
+		expect(historyQuery.get("dataset")).toBe("safety");
+		expect(historyQuery.get("prompt_ref")).toBe("safety@prod");
+		expect(historyQuery.get("model")).toBe("deepseek-v4-flash");
 	});
 
-	test("fails before any mutation or provider call when history has no exact match", async () => {
+	test("rejects absent or mismatched baseline history before mutation or provider traffic", async () => {
+		const exactHistory = {
+			id: 9,
+			dataset_slug: "safety",
+			dataset_hash: DATASET_HASH,
+			prompt_id: 1,
+			prompt_version: 1,
+			prompt_ref: "safety@prod",
+			model: "deepseek-v4-flash",
+			cases_total: 1,
+			score_avg: 0.9,
+		};
+		const histories = [
+			[],
+			...[
+				{ dataset_slug: "other" },
+				{ dataset_hash: "b".repeat(64) },
+				{ prompt_id: 2 },
+				{ prompt_version: 2 },
+				{ prompt_ref: "safety@candidate" },
+				{ model: "gemini-2.5-flash" },
+				{ cases_total: 2 },
+			].map((mismatch) => [{ ...exactHistory, ...mismatch }]),
+		];
+		for (const history of histories) {
+			const gateway = { complete: vi.fn() };
+			const admin = {
+				promptSummaries: vi.fn().mockResolvedValue([
+					{
+						id: 1,
+						slug: "safety",
+						latest_version: 2,
+						labels: [
+							{ label: "candidate", version: 2 },
+							{ label: "prod", version: 1 },
+						],
+					},
+				]),
+				upsertDataset: vi.fn(),
+				createRun: vi.fn(),
+				historicalRuns: vi.fn().mockResolvedValue(history),
+			};
+			await expect(
+				runEvaluation(
+					{
+						dataset: "safety",
+						prompt: "safety@candidate",
+						baseline: "prod",
+						baselineFromHistory: true,
+					},
+					{ gateway, admin, loadDataset: vi.fn().mockResolvedValue(dataset) },
+				),
+			).rejects.toThrow("Historical baseline is missing.");
+			expect(admin.upsertDataset).not.toHaveBeenCalled();
+			expect(admin.createRun).not.toHaveBeenCalled();
+			expect(gateway.complete).not.toHaveBeenCalled();
+		}
+	});
+
+	test("rejects malformed historical rows with a sanitized error before side effects", async () => {
 		const gateway = { complete: vi.fn() };
 		const admin = {
 			promptSummaries: vi.fn().mockResolvedValue([
@@ -253,10 +332,11 @@ describe("eval runner", () => {
 			createRun: vi.fn(),
 			historicalRuns: vi.fn().mockResolvedValue([
 				{
-					dataset_hash: "other",
+					dataset_hash: DATASET_HASH,
 					prompt_ref: "safety@prod",
-					model: "gemini-2.5-flash",
+					model: "deepseek-v4-flash",
 					score_avg: null,
+					secret: "must-not-appear",
 				},
 			]),
 		};
@@ -270,7 +350,7 @@ describe("eval runner", () => {
 				},
 				{ gateway, admin, loadDataset: vi.fn().mockResolvedValue(dataset) },
 			),
-		).rejects.toThrow("Historical baseline is missing");
+		).rejects.toThrow("Historical baseline response was invalid.");
 		expect(admin.upsertDataset).not.toHaveBeenCalled();
 		expect(admin.createRun).not.toHaveBeenCalled();
 		expect(gateway.complete).not.toHaveBeenCalled();

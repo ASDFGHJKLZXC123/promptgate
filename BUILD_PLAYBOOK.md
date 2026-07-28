@@ -304,7 +304,7 @@ sqlite3 data/promptgate.db "SELECT prompt_id, prompt_version FROM requests ORDER
 
 ### Phase 5 — Eval harness (`pg-eval`)
 
-Human-approved gate amendment (2026-07-27): Phase 5 runs exactly `deepseek-v4-flash` as its target, with `gemini-2.5-flash` only as its independent judge. Gemini judges DeepSeek output, and neither model judges itself. OpenAI, Anthropic, and Gemini remain supported gateway providers outside this narrow Phase 5 target matrix. Phase 6's later four-provider requirement is unchanged.
+Human-approved gate amendments: Phase 5 runs exactly `deepseek-v4-flash` as its target, with `gemini-2.5-flash` only as its independent judge (2026-07-27). Gemini judges DeepSeek output, and neither model judges itself. The remaining live good/degraded commands reuse the completed persisted baseline accepted from code HEAD `a77b9cf` only through the strict `--baseline prod --baseline-from-history` path (2026-07-28). OpenAI, Anthropic, and Gemini remain supported gateway providers outside this narrow Phase 5 target matrix. Phase 6's later four-provider paired requirement is unchanged.
 
 1. **Package scaffold.** `packages/evals`: deps `yaml zod`, bin entry `pg-eval` → `src/cli.ts` (hand-rolled arg parsing or `node:util` parseArgs — no commander needed for 3 commands: `run`, `seed-ci`, `comment`). The root workspace link exposes `./node_modules/.bin/pg-eval`; invoke that path directly so infrastructure exit `2` is not collapsed to `1` by pnpm's filtered `exec` wrapper.
 
@@ -324,21 +324,21 @@ Human-approved gate amendment (2026-07-27): Phase 5 runs exactly `deepseek-v4-fl
 
 5. **Judge.** `llmRubric` calls the gateway through the locked map: **DeepSeek target → Gemini judge**. It uses registry prompt `judge_rubric_v1@1` (create it via seed script — the rubric prompt is itself versioned, per §7.2), `response_format: {type: "json_object"}`, and parses `{pass, score, rationale}`. Reject every unapproved target model before admin mutation or provider traffic, and reject any self-judge mapping. Malformed judge output = infrastructure error (exit 2), not a case failure.
 
-6. **Run + persist + compare.** At start: resolve every label ref to a concrete version (frozen for the whole run, §7.2) and upsert the dataset via `POST /admin/api/evals/datasets`. Runner creates **one `eval_runs` row per target model**, loops that model's cases, persists run + results via `POST /admin/api/evals/runs` (admin token from `--admin-token`/`PG_ADMIN_TOKEN` — eval traffic and persistence use different credentials, §5.2). `--baseline prod` is **paired**: run the baseline ref first, then the candidate, compare within the pair (works in a fresh CI database); `--baseline-from-history` for cheap local iteration only. `--min-request-interval-ms` is an opt-in per-model request-start pace (default `0`) shared by all target and judge calls for the complete paired run; use `15000` ms for the DeepSeek-led gate. Each paired command can consume 14 Gemini rubric calls, so run the literal good and deliberately degraded commands on separate fresh Gemini daily-quota days. It does not retry, alter cache/budget behavior, or change the dataset/model/exit contract. Apply §7.2's exit-code contract verbatim. Print the markdown summary table (case, model, pass, score, first failed assertion detail).
+6. **Run + persist + compare.** At start, resolve every label ref to a concrete version (frozen for the whole run, §7.2). The default `--baseline prod` path remains **paired**: run the baseline ref first, then the candidate, compare within the pair (works in a fresh CI database). For the owner-approved remaining Phase 5 live commands only, `--baseline prod --baseline-from-history` accepts the completed baseline run from code HEAD `a77b9cf` after the history response proves the current dataset slug/exact hash, frozen baseline prompt ID/ref/version, exact target model, and current case count. Fetch and validate that history before dataset upsert, provider traffic, or any admin mutation; a malformed response or no exact row must return sanitized infrastructure exit 2 with no such side effects. Never reuse the unpersisted partial candidate. After that check, upsert the dataset via `POST /admin/api/evals/datasets`, execute only the candidate, and persist its one target-model run plus results atomically through `POST /admin/api/evals/runs` (admin token from `--admin-token`/`PG_ADMIN_TOKEN` — eval traffic and persistence use different credentials, §5.2). `--min-request-interval-ms` remains an opt-in per-model request-start pace (default `0`) shared by target and judge calls; use `15000` ms for the DeepSeek-led gate. Each remaining candidate command can consume at most seven Gemini rubric calls, so run the literal good and deliberately degraded commands on separate fresh Gemini daily-quota days. Do not add retries or change cache/budget, dataset/model, persistence/table, exit-code, direct-bin, or $1-key contracts. Apply §7.2's exit-code contract verbatim and print the markdown summary table (case, model, pass, score, first failed assertion detail). This live quota exception does not amend the paired Phase 6 CI gate.
 
 7. **Golden dataset.** Execute amended §7.3: preserve the recoverable carematch probes, derive additional seeds from the immutable safety policy without calling them verbatim originals, expand with Claude Fable 5 / high, and hand-review every final label. Commit `safety_screening.yaml`, `asserts/*.js`, and `docs/evidence/phase-5-seed-provenance.md` together.
 
 **Verify phase 5:**
 ```bash
 ./node_modules/.bin/pg-eval run --dataset safety_screening \
-  --prompt safety_screen@candidate --baseline prod \
+  --prompt safety_screen@candidate --baseline prod --baseline-from-history \
   --gateway http://localhost:8787 --key $KEY --admin-token $ADMIN_TOKEN \
   --min-request-interval-ms 15000
 echo $?    # 0 on the good prompt
 # Stop here. Wait for a confirmed fresh Gemini daily quota before the degraded process.
 # now deliberately break the candidate prompt (new version that drops the safety instruction), re-point label:
 ./node_modules/.bin/pg-eval run --dataset safety_screening \
-  --prompt safety_screen@candidate --baseline prod \
+  --prompt safety_screen@candidate --baseline prod --baseline-from-history \
   --gateway http://localhost:8787 --key $KEY --admin-token $ADMIN_TOKEN \
   --min-request-interval-ms 15000
 echo $?    # 1, with a table naming exactly which cases failed
