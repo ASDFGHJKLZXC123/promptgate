@@ -304,7 +304,7 @@ sqlite3 data/promptgate.db "SELECT prompt_id, prompt_version FROM requests ORDER
 
 ### Phase 5 — Eval harness (`pg-eval`)
 
-Human-approved gate amendment (2026-07-27): Phase 5 runs exactly `gemini-2.5-flash` and `deepseek-v4-flash` as targets and cross-judges them. DeepSeek judges Gemini output, Gemini judges DeepSeek output, and neither model judges itself. OpenAI and Anthropic remain supported gateway providers but are not Phase 5 target or judge models. Phase 6's later four-provider requirement is unchanged.
+Human-approved gate amendment (2026-07-27): Phase 5 runs exactly `deepseek-v4-flash` as its target, with `gemini-2.5-flash` only as its independent judge. Gemini judges DeepSeek output, and neither model judges itself. OpenAI, Anthropic, and Gemini remain supported gateway providers outside this narrow Phase 5 target matrix. Phase 6's later four-provider requirement is unchanged.
 
 1. **Package scaffold.** `packages/evals`: deps `yaml zod`, bin entry `pg-eval` → `src/cli.ts` (hand-rolled arg parsing or `node:util` parseArgs — no commander needed for 3 commands: `run`, `seed-ci`, `comment`). The root workspace link exposes `./node_modules/.bin/pg-eval`; invoke that path directly so infrastructure exit `2` is not collapsed to `1` by pnpm's filtered `exec` wrapper.
 
@@ -322,9 +322,9 @@ Human-approved gate amendment (2026-07-27): Phase 5 runs exactly `gemini-2.5-fla
 
 4. **Gateway client.** Thin fetch wrapper (base URL + key from flags/env). Phase 5 target and judge calls use `temperature: 0`; judge calls send no provider-specific reasoning-effort override. All calls set **`pg_no_cache: true`** (persisted quality runs must hit live models — cached responses conceal provider drift; `--allow-cache` is for local harness development only) and `pg_feature: "eval"`.
 
-5. **Judge.** `llmRubric` calls the gateway through the locked cross-provider map: **Gemini target → DeepSeek judge; DeepSeek target → Gemini judge**. It uses registry prompt `judge_rubric_v1@1` (create it via seed script — the rubric prompt is itself versioned, per §7.2), `response_format: {type: "json_object"}`, and parses `{pass, score, rationale}`. Reject every unapproved target model before admin mutation or provider traffic, and reject any self-judge mapping. Malformed judge output = infrastructure error (exit 2), not a case failure.
+5. **Judge.** `llmRubric` calls the gateway through the locked map: **DeepSeek target → Gemini judge**. It uses registry prompt `judge_rubric_v1@1` (create it via seed script — the rubric prompt is itself versioned, per §7.2), `response_format: {type: "json_object"}`, and parses `{pass, score, rationale}`. Reject every unapproved target model before admin mutation or provider traffic, and reject any self-judge mapping. Malformed judge output = infrastructure error (exit 2), not a case failure.
 
-6. **Run + persist + compare.** At start: resolve every label ref to a concrete version (frozen for the whole run, §7.2) and upsert the dataset via `POST /admin/api/evals/datasets`. Runner creates **one `eval_runs` row per model**, loops that model's cases, persists run + results via `POST /admin/api/evals/runs` (admin token from `--admin-token`/`PG_ADMIN_TOKEN` — eval traffic and persistence use different credentials, §5.2). `--baseline prod` is **paired**: run the baseline ref first, then the candidate, compare within the pair (works in a fresh CI database); `--baseline-from-history` for cheap local iteration only. `--min-request-interval-ms` is an opt-in per-model request-start pace (default `0`) shared by all target and cross-judge calls for the complete paired run; use `6500` ms for the observed Gemini 10-RPM local quota, and wait 65 seconds unconditionally between the literal Verify's good and deliberately degraded commands. It does not retry, alter cache/budget behavior, or change the dataset/model/exit contract. Apply §7.2's exit-code contract verbatim. Print the markdown summary table (case, model, pass, score, first failed assertion detail).
+6. **Run + persist + compare.** At start: resolve every label ref to a concrete version (frozen for the whole run, §7.2) and upsert the dataset via `POST /admin/api/evals/datasets`. Runner creates **one `eval_runs` row per target model**, loops that model's cases, persists run + results via `POST /admin/api/evals/runs` (admin token from `--admin-token`/`PG_ADMIN_TOKEN` — eval traffic and persistence use different credentials, §5.2). `--baseline prod` is **paired**: run the baseline ref first, then the candidate, compare within the pair (works in a fresh CI database); `--baseline-from-history` for cheap local iteration only. `--min-request-interval-ms` is an opt-in per-model request-start pace (default `0`) shared by all target and judge calls for the complete paired run; use `15000` ms for the DeepSeek-led gate. Each paired command can consume 14 Gemini rubric calls, so run the literal good and deliberately degraded commands on separate fresh Gemini daily-quota days. It does not retry, alter cache/budget behavior, or change the dataset/model/exit contract. Apply §7.2's exit-code contract verbatim. Print the markdown summary table (case, model, pass, score, first failed assertion detail).
 
 7. **Golden dataset.** Execute amended §7.3: preserve the recoverable carematch probes, derive additional seeds from the immutable safety policy without calling them verbatim originals, expand with Claude Fable 5 / high, and hand-review every final label. Commit `safety_screening.yaml`, `asserts/*.js`, and `docs/evidence/phase-5-seed-provenance.md` together.
 
@@ -333,14 +333,14 @@ Human-approved gate amendment (2026-07-27): Phase 5 runs exactly `gemini-2.5-fla
 ./node_modules/.bin/pg-eval run --dataset safety_screening \
   --prompt safety_screen@candidate --baseline prod \
   --gateway http://localhost:8787 --key $KEY --admin-token $ADMIN_TOKEN \
-  --min-request-interval-ms 6500
+  --min-request-interval-ms 15000
 echo $?    # 0 on the good prompt
-sleep 65   # unconditional cooldown before the deliberately degraded process
+# Stop here. Wait for a confirmed fresh Gemini daily quota before the degraded process.
 # now deliberately break the candidate prompt (new version that drops the safety instruction), re-point label:
 ./node_modules/.bin/pg-eval run --dataset safety_screening \
   --prompt safety_screen@candidate --baseline prod \
   --gateway http://localhost:8787 --key $KEY --admin-token $ADMIN_TOKEN \
-  --min-request-interval-ms 6500
+  --min-request-interval-ms 15000
 echo $?    # 1, with a table naming exactly which cases failed
 ```
 Plus the §11 meta-test: fixture dataset + fake provider → assert exact pass/fail/score output.

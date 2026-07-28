@@ -10,7 +10,7 @@ const dataset = {
 	datasetHash: "hash",
 	description: "Safety",
 	prompts: ["safety@candidate"],
-	providers: ["gemini-2.5-flash", "deepseek-v4-flash"],
+	providers: ["deepseek-v4-flash"],
 	defaultTest: { threshold: 1 },
 	tests: [
 		{
@@ -232,13 +232,7 @@ describe("eval runner", () => {
 			),
 		).resolves.toMatchObject({ exitCode: 0 });
 		expect(order[0]).toBe("history");
-		expect(order).toEqual([
-			"history",
-			"history",
-			"upsert",
-			"persist",
-			"persist",
-		]);
+		expect(order).toEqual(["history", "upsert", "persist"]);
 	});
 
 	test("fails before any mutation or provider call when history has no exact match", async () => {
@@ -282,7 +276,7 @@ describe("eval runner", () => {
 		expect(gateway.complete).not.toHaveBeenCalled();
 	});
 
-	test("requires the exact Gemini and DeepSeek target set before admin or gateway traffic", async () => {
+	test("requires the exact DeepSeek-only target set before admin or gateway traffic", async () => {
 		const gateway = { complete: vi.fn() };
 		const admin = {
 			promptSummaries: vi.fn(),
@@ -293,7 +287,6 @@ describe("eval runner", () => {
 		for (const changed of [
 			{ ...dataset, prompts: ["other@candidate"] },
 			{ ...dataset, providers: ["gemini-2.5-flash"] },
-			{ ...dataset, providers: ["deepseek-v4-flash"] },
 			{ ...dataset, providers: ["gemini-2.5-flash", "gemini-2.5-flash"] },
 			{ ...dataset, providers: ["deepseek-v4-flash", "gemini-2.5-flash"] },
 			{ ...dataset, providers: ["gpt-5.6-luna"] },
@@ -343,14 +336,12 @@ describe("eval runner", () => {
 			},
 		);
 		expect(result.exitCode).toBe(0);
-		expect(result.markdown).toContain("| case-a | gemini-2.5-flash | pass |");
+		expect(result.markdown).toContain("| case-a | deepseek-v4-flash | pass |");
 		expect(gateway.complete.mock.calls.map(([call]) => call.prompt)).toEqual([
 			"safety@1",
-			"safety@1",
-			"safety@2",
 			"safety@2",
 		]);
-		expect(admin.createRun).toHaveBeenCalledTimes(4);
+		expect(admin.createRun).toHaveBeenCalledTimes(2);
 		expect(admin.createRun.mock.calls[0]?.[0]).toMatchObject({
 			prompt_version: 1,
 			dataset_id: 4,
@@ -408,7 +399,7 @@ describe("eval runner", () => {
 			},
 		);
 
-		expect(gateway.complete).toHaveBeenCalledTimes(4);
+		expect(gateway.complete).toHaveBeenCalledTimes(2);
 		expect(gateway.complete.mock.calls.every(([call]) => call.allowCache)).toBe(
 			true,
 		);
@@ -421,7 +412,7 @@ describe("eval runner", () => {
 		);
 	});
 
-	test("paces target and cross-judge calls by model for the full run", async () => {
+	test("paces sole-target and independent-judge calls by model for the full run", async () => {
 		let paceNow = 0;
 		const callTimes = new Map<string, number[]>();
 		const callPrompts = new Map<string, string[]>();
@@ -480,7 +471,7 @@ describe("eval runner", () => {
 				dataset: "safety",
 				prompt: "safety@candidate",
 				baseline: "prod",
-				minRequestIntervalMs: 6_500,
+				minRequestIntervalMs: 15_000,
 			},
 			{
 				gateway,
@@ -496,19 +487,26 @@ describe("eval runner", () => {
 		);
 
 		for (const times of callTimes.values()) {
-			expect(times).toHaveLength(8);
+			expect(times).toHaveLength(4);
 			for (let index = 1; index < times.length; index += 1) {
 				const previous = times[index - 1];
 				const current = times[index];
 				if (previous === undefined || current === undefined)
 					throw new Error("Expected paced call timestamps.");
-				expect(current - previous).toBeGreaterThanOrEqual(6_500);
+				expect(current - previous).toBeGreaterThanOrEqual(15_000);
 			}
 		}
-		for (const prompts of callPrompts.values()) {
-			expect(prompts).toContain("safety@1");
-			expect(prompts).toContain("safety@2");
-			expect(prompts).toContain("judge_rubric_v1@1");
-		}
+		expect(callPrompts.get("deepseek-v4-flash")).toEqual([
+			"safety@1",
+			"safety@1",
+			"safety@2",
+			"safety@2",
+		]);
+		expect(callPrompts.get("gemini-2.5-flash")).toEqual([
+			"judge_rubric_v1@1",
+			"judge_rubric_v1@1",
+			"judge_rubric_v1@1",
+			"judge_rubric_v1@1",
+		]);
 	});
 });

@@ -1,6 +1,6 @@
 # PromptGate — Implementation Guide
 
-Companion to `PromptGate_PROJECT_IDEA.md`. All 17 locked decisions (2026-07-12) are treated as fixed except the human-approved amendments recorded in `PROGRESS.md`: decision #2 expanded to OpenAI, Anthropic, Gemini, and DeepSeek on 2026-07-25; decision #12 received the verified carematch provenance correction on 2026-07-26; and decision #11 narrowed the Phase 5 target/judge gate to Gemini 2.5 Flash and DeepSeek V4 Flash with cross-provider judging on 2026-07-27. `GEMINI_API_KEY`/`DEEPSEEK_API_KEY` join the optional-at-boot provider keys (§1's config, BUILD_PLAYBOOK.md phase 1 step 9). The carematch `TODO(verify)` is resolved in §7.3 from the immutable public source plus retained build-session evidence; `web_builder_llm` references still carry `TODO(verify)` markers to confirm against the finished repository when their phases consume them.
+Companion to `PromptGate_PROJECT_IDEA.md`. All 17 locked decisions (2026-07-12) are treated as fixed except the human-approved amendments recorded in `PROGRESS.md`: decision #2 expanded to OpenAI, Anthropic, Gemini, and DeepSeek on 2026-07-25; decision #12 received the verified carematch provenance correction on 2026-07-26; and decision #11 narrowed the Phase 5 target/judge gate to DeepSeek V4 Flash with Gemini 2.5 Flash as its independent judge on 2026-07-27. `GEMINI_API_KEY`/`DEEPSEEK_API_KEY` join the optional-at-boot provider keys (§1's config, BUILD_PLAYBOOK.md phase 1 step 9). The carematch `TODO(verify)` is resolved in §7.3 from the immutable public source plus retained build-session evidence; `web_builder_llm` references still carry `TODO(verify)` markers to confirm against the finished repository when their phases consume them.
 
 ---
 
@@ -22,7 +22,7 @@ These were not in the locked decisions; defaults chosen for lowest friction with
 | Dev runner | tsx watch | |
 | Container | multi-stage Dockerfile, `node:22-slim` runtime | better-sqlite3 is native — build deps stay in stage 1 |
 | Money | integer **micro-USD** everywhere (`*_micro_usd INTEGER`) | gateway budgets are concurrency-safe in-process circuit breakers; provider-side spend limits are the absolute monetary wall. No floating-point drift. Display layers divide by 1e6 |
-| Phase 5 eval judge | cross-provider: `deepseek-v4-flash` judges Gemini; `gemini-2.5-flash` judges DeepSeek | deterministic assertions run first; the LLM judge is called only for declared `llm-rubric` assertions; no self-judging or reasoning-effort override |
+| Phase 5 eval judge | `gemini-2.5-flash` judges `deepseek-v4-flash` | deterministic assertions run first; the LLM judge is called only for declared `llm-rubric` assertions; no self-judging or reasoning-effort override |
 
 ## 2. Repo layout (decision #17: monorepo)
 
@@ -371,7 +371,6 @@ description: Safety screening triage (seeded from carematch_ai)
 prompts:
   - safety_screen@candidate          # PromptGate extension: registry refs, not inline prompts
 providers:
-  - gemini-2.5-flash
   - deepseek-v4-flash
 defaultTest:
   threshold: 0.8            # promptfoo puts test-level threshold directly on the test case, NOT under options
@@ -402,12 +401,12 @@ Supported assertion types (v1): `equals`, `contains`, `icontains`, `regex`, `is-
   --dataset safety_screening --prompt safety_screen@candidate \
   --baseline prod --gateway http://localhost:8787 \
   --key $PG_EVAL_KEY --admin-token $PG_ADMIN_TOKEN \
-  --min-request-interval-ms 6500
+  --min-request-interval-ms 15000
 ```
 
-- All eval traffic goes **through the gateway itself** (dogfooding: evals get metered and budgeted like any client) with `pg_no_cache: true` — persisted quality measurements must hit live models or drift stays invisible (`--allow-cache` exists for local harness development only and marks the run `trigger: 'manual'`). The human-approved Phase 5 matrix contains exactly **`gemini-2.5-flash` and `deepseek-v4-flash`** as targets. Judge calls also go through the gateway and cross providers: DeepSeek judges Gemini output, while Gemini judges DeepSeek output. Neither model may judge itself. Each judge uses `response_format: {type: "json_object"}` and the immutable registry prompt `judge_rubric_v1@1`.
+- All eval traffic goes **through the gateway itself** (dogfooding: evals get metered and budgeted like any client) with `pg_no_cache: true` — persisted quality measurements must hit live models or drift stays invisible (`--allow-cache` exists for local harness development only and marks the run `trigger: 'manual'`). The human-approved Phase 5 matrix contains exactly **`deepseek-v4-flash`** as its target; **`gemini-2.5-flash`** is used only to judge declared rubrics. Neither model judges itself. Each judge uses `response_format: {type: "json_object"}` and the immutable registry prompt `judge_rubric_v1@1`.
 - Phase 5 target and judge requests use `temperature: 0`. Judge requests send no `reasoning_effort`, because that is not part of the approved Gemini/DeepSeek compatibility contract. OpenAI and Anthropic remain supported gateway providers but are not Phase 5 target or judge models. This amendment does not waive Phase 6's separate four-provider requirement.
-- `--min-request-interval-ms` is an opt-in, non-negative safe-integer delay (default `0`; ambient environment values cannot enable it). It applies one shared start-time queue per model across all target and cross-judge calls, including paired baseline and candidate work; it neither retries failures nor changes caching, budgets, datasets, models, or exit codes. Use `6500` for the observed Gemini 10-RPM local quota. The literal Phase 5 Verify waits 65 seconds unconditionally between its good and deliberately degraded commands.
+- `--min-request-interval-ms` is an opt-in, non-negative safe-integer delay (default `0`; ambient environment values cannot enable it). It applies one shared start-time queue per model across all target and judge calls, including paired baseline and candidate work; it neither retries failures nor changes caching, budgets, datasets, models, or exit codes. Use `15000` for the DeepSeek-led gate. Run the good and deliberately degraded commands on separate fresh Gemini daily-quota days, because each paired command can consume 14 Gemini rubric calls.
 - Label freezing: at run start, every label ref (`@candidate`, `@prod`) is resolved to a concrete version once; all cases in the run use that version, and it's what `eval_runs.prompt_version` records.
 - One `eval_runs` row per model: N models in the dataset = N runs sharing a `git_sha`, each with its own results (matches the schema's `(run_id, case_id)` key).
 - Deterministic assertions run first and short-circuit; the judge only runs on cases that declare `llm-rubric` — decision #11's cost control.
@@ -456,7 +455,7 @@ jobs:
       - run: >
           ./node_modules/.bin/pg-eval run
           --dataset safety_screening --prompt safety_screen@candidate
-          --baseline prod --min-request-interval-ms 6500
+          --baseline prod --min-request-interval-ms 15000
                                                     # paired: runs prod then candidate in this fresh DB
       - run: ./node_modules/.bin/pg-eval comment   # optional PR summary, needs GITHUB_TOKEN
 ```
@@ -520,7 +519,7 @@ The phase-by-phase playbook — ordered steps, exact files, commands, key code, 
 | Provider wire-format drift breaks adapters | nightly contract tests (§11); adapters validate with Zod and fail loud, never coerce silently |
 | Streaming metering inaccurate (aborts, missing usage) | `cost_estimated` flag + estimated-vs-exact split visible in dashboard; never silently guess |
 | Pricing table goes stale → wrong costs | date-effective rows; startup warning if newest `effective_from` > 60 days old |
-| CI eval flakiness (LLM nondeterminism) fails good PRs | deterministic assertions dominate the gate; judge cases use threshold + `max-score-drop` band, not exact match; Phase 5 pins Gemini 2.5 Flash and DeepSeek V4 Flash at temperature zero and cross-judges instead of self-judging |
+| CI eval flakiness (LLM nondeterminism) fails good PRs | deterministic assertions dominate the gate; judge cases use threshold + `max-score-drop` band, not exact match; Phase 5 pins DeepSeek V4 Flash at temperature zero and uses Gemini 2.5 Flash as its independent judge instead of self-judging |
 | CI cost runaway | $1 circuit-breaker gateway budget enforced by reserve-then-reconcile (§3.5); dedicated CI provider keys carry provider-side spend limits as the absolute outer wall |
 | web_builder_llm needs tool calls (adapter gap) | resolve the `TODO(verify)` in phase 2, not phase 8; backup dogfood app named |
 | Scope creep toward SaaS (multi-tenant, orgs, SSO) | scope guard is in the idea file; admin auth stays a single env token by decision #15 |

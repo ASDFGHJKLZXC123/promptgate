@@ -250,7 +250,7 @@ export async function runEvaluation(
 		)
 	)
 		throw new EvalRunError(
-			"Phase 5 requires Gemini then DeepSeek exactly once as dataset providers.",
+			"Phase 5 requires DeepSeek exactly once as the dataset provider.",
 		);
 	const summaries = await deps.admin.promptSummaries();
 	const candidate = freezeRef(options.prompt, summaries);

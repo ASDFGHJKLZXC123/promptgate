@@ -17,7 +17,7 @@ const fixture: LoadedDataset = {
 	datasetHash: "meta-hash",
 	description: "Fixture eval of evals",
 	prompts: ["safety@candidate"],
-	providers: ["gemini-2.5-flash", "deepseek-v4-flash"],
+	providers: ["deepseek-v4-flash"],
 	defaultTest: { threshold: 1 },
 	tests: [
 		{
@@ -195,7 +195,7 @@ function cliRuntime(
 }
 
 describe("Phase 5 eval-of-evals regression", () => {
-	test("persists exact multi-model target and judge results, costs, markdown, and warnings", async () => {
+	test("persists exact DeepSeek target and Gemini judge results, costs, markdown, and warnings", async () => {
 		const { deps, calls, persisted } = createFakeDependencies();
 		const result = await runEvaluation(
 			{ dataset: "meta-eval", prompt: "safety@candidate", baseline: "prod" },
@@ -207,35 +207,25 @@ describe("Phase 5 eval-of-evals regression", () => {
 			markdown: [
 				"| case | model | pass | score | first failed detail |",
 				"|---|---|---|---|---|",
-				"| safe-case | gemini-2.5-flash | pass | 0.75 |  |",
-				"| risk-case | gemini-2.5-flash | fail | 0.25 | rubric failed |",
 				"| safe-case | deepseek-v4-flash | pass | 0.75 |  |",
 				"| risk-case | deepseek-v4-flash | fail | 0.25 | rubric failed |",
 			].join("\n"),
 			warnings: ["fixture warning"],
 		});
-		expect(calls).toHaveBeenCalledTimes(16);
+		expect(calls).toHaveBeenCalledTimes(8);
 		expect(calls.mock.calls.map(([call]) => [call.model, call.prompt])).toEqual(
 			[
-				["gemini-2.5-flash", "safety@1"],
-				["deepseek-v4-flash", JUDGE_PROMPT_REF],
-				["gemini-2.5-flash", "safety@1"],
-				["deepseek-v4-flash", JUDGE_PROMPT_REF],
 				["deepseek-v4-flash", "safety@1"],
 				["gemini-2.5-flash", JUDGE_PROMPT_REF],
 				["deepseek-v4-flash", "safety@1"],
 				["gemini-2.5-flash", JUDGE_PROMPT_REF],
-				["gemini-2.5-flash", "safety@2"],
-				["deepseek-v4-flash", JUDGE_PROMPT_REF],
-				["gemini-2.5-flash", "safety@2"],
-				["deepseek-v4-flash", JUDGE_PROMPT_REF],
 				["deepseek-v4-flash", "safety@2"],
 				["gemini-2.5-flash", JUDGE_PROMPT_REF],
 				["deepseek-v4-flash", "safety@2"],
 				["gemini-2.5-flash", JUDGE_PROMPT_REF],
 			],
 		);
-		expect(persisted).toHaveLength(4);
+		expect(persisted).toHaveLength(2);
 		expect(
 			persisted.map((run) => ({
 				prompt_ref: run.prompt_ref,
@@ -247,22 +237,8 @@ describe("Phase 5 eval-of-evals regression", () => {
 		).toEqual([
 			{
 				prompt_ref: "safety@prod",
-				model: "gemini-2.5-flash",
-				score_avg: 0.75,
-				cost_micro_usd: 24,
-				resultCosts: [12, 12],
-			},
-			{
-				prompt_ref: "safety@prod",
 				model: "deepseek-v4-flash",
 				score_avg: 0.75,
-				cost_micro_usd: 24,
-				resultCosts: [12, 12],
-			},
-			{
-				prompt_ref: "safety@candidate",
-				model: "gemini-2.5-flash",
-				score_avg: 0.5,
 				cost_micro_usd: 24,
 				resultCosts: [12, 12],
 			},

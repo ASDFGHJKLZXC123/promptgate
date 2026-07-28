@@ -37,7 +37,7 @@ describe("pg-eval CLI scaffold", () => {
 				"--max-score-drop",
 				"0.05",
 				"--min-request-interval-ms",
-				"6500",
+				"15000",
 			]),
 		).toEqual({
 			command: "run",
@@ -49,7 +49,7 @@ describe("pg-eval CLI scaffold", () => {
 				gateway: "http://localhost:8787",
 				key: "pg-test",
 				"max-score-drop": "0.05",
-				"min-request-interval-ms": "6500",
+				"min-request-interval-ms": "15000",
 				prompt: "safety_screen@candidate",
 			},
 		});
@@ -164,7 +164,7 @@ describe("pg-eval CLI scaffold", () => {
 					"--prompt",
 					"safety_screen@candidate",
 					"--min-request-interval-ms",
-					"6500",
+					"15000",
 				],
 				io,
 				{},
@@ -172,7 +172,7 @@ describe("pg-eval CLI scaffold", () => {
 			),
 		).resolves.toBe(0);
 		expect(runEvaluation).toHaveBeenCalledWith(
-			expect.objectContaining({ minRequestIntervalMs: 6_500 }),
+			expect.objectContaining({ minRequestIntervalMs: 15_000 }),
 			expect.any(Object),
 		);
 	});

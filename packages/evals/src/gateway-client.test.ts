@@ -348,7 +348,7 @@ describe("GatewayClient", () => {
 		});
 	});
 
-	test("serializes both Phase 5 judges at zero temperature without an effort override", async () => {
+	test("serializes both structured eval models at zero temperature without an effort override", async () => {
 		for (const model of ["gemini-2.5-flash", "deepseek-v4-flash"] as const) {
 			const fetcher = vi.fn<FetchLike>().mockResolvedValue(successResponse());
 			await client(fetcher).complete({

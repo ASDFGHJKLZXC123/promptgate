@@ -8,15 +8,14 @@ import type {
 import type { GatewayCall, GatewayClient } from "./gateway-client.js";
 
 export const PHASE_5_TARGET_MODELS = Object.freeze([
-	"gemini-2.5-flash",
 	"deepseek-v4-flash",
 ] as const);
 export type Phase5TargetModel = (typeof PHASE_5_TARGET_MODELS)[number];
+export type Phase5JudgeModel = "gemini-2.5-flash";
 
 export const JUDGE_MODEL_BY_TARGET = Object.freeze({
-	"gemini-2.5-flash": "deepseek-v4-flash",
 	"deepseek-v4-flash": "gemini-2.5-flash",
-} satisfies Record<Phase5TargetModel, Phase5TargetModel>);
+} satisfies Record<Phase5TargetModel, Phase5JudgeModel>);
 export const JUDGE_PROMPT_REF = "judge_rubric_v1@1" as const;
 export const MAX_JUDGE_RATIONALE_LENGTH = 1_000;
 
@@ -39,10 +38,10 @@ export class JudgeInfrastructureError extends Error {
 	}
 }
 
-export function judgeModelForTarget(model: string): Phase5TargetModel {
+export function judgeModelForTarget(model: string): Phase5JudgeModel {
 	if (!Object.hasOwn(JUDGE_MODEL_BY_TARGET, model)) {
 		throw new JudgeInfrastructureError(
-			"Phase 5 requires Gemini or DeepSeek as the target model.",
+			"Phase 5 requires DeepSeek as the target model.",
 		);
 	}
 	const judge = JUDGE_MODEL_BY_TARGET[model as Phase5TargetModel];

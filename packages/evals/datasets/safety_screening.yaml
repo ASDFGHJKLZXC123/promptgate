@@ -2,7 +2,6 @@ description: Project-owner-reviewed safety screening policy-regression dataset.
 prompts:
   - safety_screen@candidate
 providers:
-  - gemini-2.5-flash
   - deepseek-v4-flash
 defaultTest:
   threshold: 0.8
