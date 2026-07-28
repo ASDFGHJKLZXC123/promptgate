@@ -14,6 +14,7 @@ import {
 	createGatewayRubricEvaluator,
 	PHASE_5_TARGET_MODELS,
 } from "./judge.js";
+import { PerModelRequestPacer, type RequestPacingClock } from "./pacing.js";
 
 export class EvalRunError extends Error {
 	constructor(message: string) {
@@ -28,6 +29,7 @@ export interface EvalRunnerOptions {
 	baselineFromHistory?: boolean;
 	allowCache?: boolean;
 	maxScoreDrop?: number;
+	minRequestIntervalMs?: number;
 	gitSha?: string;
 	trigger?: "ci" | "manual";
 }
@@ -39,6 +41,7 @@ export interface EvalRunDependencies {
 	>;
 	loadDataset?: typeof loadDataset;
 	now?: () => number;
+	pacingClock?: RequestPacingClock;
 	gitSha?: () => string | undefined;
 }
 interface FrozenPrompt {
@@ -145,6 +148,7 @@ async function runModel(
 	model: string,
 	options: EvalRunnerOptions,
 	deps: EvalRunDependencies,
+	gateway: EvalRunDependencies["gateway"],
 ): Promise<ModelResult> {
 	const now = deps.now ?? Date.now;
 	const started = now();
@@ -155,7 +159,7 @@ async function runModel(
 		complete: async (
 			call: Parameters<EvalRunDependencies["gateway"]["complete"]>[0],
 		) => {
-			const response = await deps.gateway.complete({
+			const response = await gateway.complete({
 				...call,
 				allowCache: options.allowCache,
 			});
@@ -206,10 +210,20 @@ async function runModel(
 	};
 }
 
+function requestInterval(options: EvalRunnerOptions): number {
+	const interval = options.minRequestIntervalMs ?? 0;
+	if (!Number.isSafeInteger(interval) || interval < 0)
+		throw new EvalRunError(
+			"min-request-interval-ms must be a non-negative safe integer.",
+		);
+	return interval;
+}
+
 export async function runEvaluation(
 	options: EvalRunnerOptions,
 	deps: EvalRunDependencies,
 ): Promise<{ exitCode: 0 | 1; markdown: string; warnings: readonly string[] }> {
+	const minRequestIntervalMs = requestInterval(options);
 	if (options.baselineFromHistory && options.baseline === undefined)
 		throw new EvalRunError("--baseline-from-history requires --baseline.");
 	if (
@@ -278,6 +292,19 @@ export async function runEvaluation(
 		file_path: dataset.path,
 		description: dataset.description,
 	});
+	const pacer = new PerModelRequestPacer(
+		minRequestIntervalMs,
+		deps.pacingClock,
+	);
+	const gateway: EvalRunDependencies["gateway"] =
+		minRequestIntervalMs === 0
+			? deps.gateway
+			: {
+					complete: async (call) => {
+						await pacer.wait(call.model);
+						return deps.gateway.complete(call);
+					},
+				};
 	const trigger = options.allowCache ? "manual" : (options.trigger ?? "manual");
 	const gitSha = suppliedGitSha ?? resolveGitSha();
 	const persist = async (frozen: FrozenPrompt, result: ModelResult) =>
@@ -307,13 +334,27 @@ export async function runEvaluation(
 	const baselineRuns: ModelResult[] = [];
 	if (baseline && !options.baselineFromHistory)
 		for (const model of dataset.providers) {
-			const result = await runModel(dataset, baseline, model, options, deps);
+			const result = await runModel(
+				dataset,
+				baseline,
+				model,
+				options,
+				deps,
+				gateway,
+			);
 			await persist(baseline, result);
 			baselineRuns.push(result);
 		}
 	const candidateRuns: ModelResult[] = [];
 	for (const model of dataset.providers) {
-		const result = await runModel(dataset, candidate, model, options, deps);
+		const result = await runModel(
+			dataset,
+			candidate,
+			model,
+			options,
+			deps,
+			gateway,
+		);
 		await persist(candidate, result);
 		candidateRuns.push(result);
 	}

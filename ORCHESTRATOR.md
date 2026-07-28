@@ -107,6 +107,8 @@ At the end of each phase:
 
 The human-approved 2026-07-25 provider amendment permits an explicit **available-key live matrix** in phase verify blocks: every implemented provider whose key is configured must be called; every missing-key activation check must be named as deferred with its reason and must never be described as live-green. Offline parity tests and all non-live acceptance criteria still apply to every approved provider. The human-approved 2026-07-27 decision #11 amendment replaces Phase 5's OpenAI judge prerequisite with the exact Gemini/DeepSeek cross-judge matrix; it does not waive CI requirements in phase 6.
 
+The human-approved 2026-07-27 Phase 5 quota-pacing amendment adds only an opt-in eval-runner delay: `--min-request-interval-ms 6500` shares a per-model request-start queue across all target and cross-judge calls in the paired run. Its default is `0`, and ambient environment values cannot enable it; it does not authorize retries or alter cache, budget, dataset, model, or exit-code behavior. The literal Phase 5 Verify waits 65 seconds unconditionally between its good and deliberately degraded commands.
+
 ## Blocking conditions — stop and ask, never guess
 
 - **`TODO(verify)` items** (external repos): resolving them needs `Archive/carematch_ai` or `Finished/web_builder_llm`. Ask the human for access or for the answers; record the resolution in `PROGRESS.md`. An unresolved item blocks **only the phase that consumes it** (each is tagged with its phase in `PROGRESS.md`) — earlier phases proceed normally.

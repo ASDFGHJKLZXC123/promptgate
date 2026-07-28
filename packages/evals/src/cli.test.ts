@@ -2,7 +2,7 @@ import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, test, vi } from "vitest";
-import { type CliIo, parseCli, runCli, usage } from "./cli.js";
+import { type CliIo, type CliRuntime, parseCli, runCli, usage } from "./cli.js";
 
 const sourceBin = resolve(process.cwd(), "node_modules/.bin/pg-eval");
 
@@ -36,6 +36,8 @@ describe("pg-eval CLI scaffold", () => {
 				"--allow-cache",
 				"--max-score-drop",
 				"0.05",
+				"--min-request-interval-ms",
+				"6500",
 			]),
 		).toEqual({
 			command: "run",
@@ -47,6 +49,7 @@ describe("pg-eval CLI scaffold", () => {
 				gateway: "http://localhost:8787",
 				key: "pg-test",
 				"max-score-drop": "0.05",
+				"min-request-interval-ms": "6500",
 				prompt: "safety_screen@candidate",
 			},
 		});
@@ -82,6 +85,124 @@ describe("pg-eval CLI scaffold", () => {
 			"pg-eval run requires --dataset and --prompt.",
 		);
 	});
+
+	test("ignores ambient request-pacing values unless the CLI flag is supplied", async () => {
+		const { io } = createIo();
+		const runEvaluation = vi.fn().mockResolvedValue({
+			exitCode: 0,
+			markdown: "",
+			warnings: [],
+		});
+		const runtime = {
+			loadRunModules: async () => ({
+				resolveGatewayConfig: () => ({
+					baseUrl: new URL("https://gateway.example"),
+					key: "eval-key",
+				}),
+				resolveAdminConfig: () => ({
+					baseUrl: new URL("https://gateway.example"),
+					adminToken: "admin-token",
+				}),
+				GatewayClient: class {} as never,
+				AdminClient: class {} as never,
+				runEvaluation,
+			}),
+		} satisfies CliRuntime;
+		await expect(
+			runCli(
+				[
+					"run",
+					"--dataset",
+					"safety_screening",
+					"--prompt",
+					"safety_screen@candidate",
+				],
+				io,
+				{
+					PG_ADMIN_TOKEN: "admin-token",
+					PG_EVAL_KEY: "eval-key",
+					PG_EVAL_MIN_REQUEST_INTERVAL_MS: "6500",
+					PG_GATEWAY_URL: "https://gateway.example",
+				},
+				runtime,
+			),
+		).resolves.toBe(0);
+		expect(runEvaluation).toHaveBeenCalledWith(
+			expect.objectContaining({ minRequestIntervalMs: 0 }),
+			expect.any(Object),
+		);
+	});
+
+	test("forwards an explicit request-pace flag to the runner", async () => {
+		const { io } = createIo();
+		const runEvaluation = vi.fn().mockResolvedValue({
+			exitCode: 0,
+			markdown: "",
+			warnings: [],
+		});
+		const runtime = {
+			loadRunModules: async () => ({
+				resolveGatewayConfig: () => ({
+					baseUrl: new URL("https://gateway.example"),
+					key: "eval-key",
+				}),
+				resolveAdminConfig: () => ({
+					baseUrl: new URL("https://gateway.example"),
+					adminToken: "admin-token",
+				}),
+				GatewayClient: class {} as never,
+				AdminClient: class {} as never,
+				runEvaluation,
+			}),
+		} satisfies CliRuntime;
+		await expect(
+			runCli(
+				[
+					"run",
+					"--dataset",
+					"safety_screening",
+					"--prompt",
+					"safety_screen@candidate",
+					"--min-request-interval-ms",
+					"6500",
+				],
+				io,
+				{},
+				runtime,
+			),
+		).resolves.toBe(0);
+		expect(runEvaluation).toHaveBeenCalledWith(
+			expect.objectContaining({ minRequestIntervalMs: 6_500 }),
+			expect.any(Object),
+		);
+	});
+
+	test.each(["", " ", "+1", "-1", "1.5", "1e3", "01", "9007199254740992"])(
+		"rejects invalid request-pace value %s before runtime resolution",
+		async (value) => {
+			const { io, stderr } = createIo();
+			const loadRunModules = vi.fn();
+			await expect(
+				runCli(
+					[
+						"run",
+						"--dataset",
+						"safety_screening",
+						"--prompt",
+						"safety_screen@candidate",
+						`--min-request-interval-ms=${value}`,
+					],
+					io,
+					{},
+					{ loadRunModules } as CliRuntime,
+				),
+			).resolves.toBe(2);
+			expect(stderr).toHaveBeenCalledWith(
+				"min-request-interval-ms must be a non-negative safe integer.",
+			);
+			expect(loadRunModules).not.toHaveBeenCalled();
+		},
+	);
 
 	test("source executable reaches argument validation without resolving compiled-only modules", () => {
 		const result = spawnSync(sourceBin, ["run"], {

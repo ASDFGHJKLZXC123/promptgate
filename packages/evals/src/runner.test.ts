@@ -78,6 +78,35 @@ describe("eval runner", () => {
 		expect(gateway.complete).not.toHaveBeenCalled();
 	});
 
+	test.each([-1, 1.5, Number.MAX_SAFE_INTEGER + 1])(
+		"rejects invalid direct request-pace option %s before dataset or service work",
+		async (minRequestIntervalMs) => {
+			const gateway = { complete: vi.fn() };
+			const admin = {
+				promptSummaries: vi.fn(),
+				upsertDataset: vi.fn(),
+				createRun: vi.fn(),
+				historicalRuns: vi.fn(),
+			};
+			const loadDataset = vi.fn();
+			await expect(
+				runEvaluation(
+					{
+						dataset: "safety",
+						prompt: "safety@candidate",
+						minRequestIntervalMs,
+					},
+					{ gateway, admin, loadDataset },
+				),
+			).rejects.toThrow(
+				"min-request-interval-ms must be a non-negative safe integer",
+			);
+			expect(loadDataset).not.toHaveBeenCalled();
+			expect(admin.promptSummaries).not.toHaveBeenCalled();
+			expect(gateway.complete).not.toHaveBeenCalled();
+		},
+	);
+
 	test("rejects ambiguous or unavailable concrete prompt refs before mutation or provider traffic", async () => {
 		const gateway = { complete: vi.fn() };
 		const upsertDataset = vi.fn();
@@ -390,5 +419,96 @@ describe("eval runner", () => {
 				results: [expect.objectContaining({ cost_micro_usd: 5 })],
 			}),
 		);
+	});
+
+	test("paces target and cross-judge calls by model for the full run", async () => {
+		let paceNow = 0;
+		const callTimes = new Map<string, number[]>();
+		const callPrompts = new Map<string, string[]>();
+		const scoredDataset = {
+			...dataset,
+			tests: [
+				{
+					...dataset.tests[0],
+					id: "case-a",
+					assert: [{ type: "llm-rubric" as const, value: "safe" }],
+				},
+				{
+					...dataset.tests[0],
+					id: "case-b",
+					assert: [{ type: "llm-rubric" as const, value: "safe" }],
+				},
+			],
+		};
+		const gateway = {
+			complete: vi
+				.fn()
+				.mockImplementation(async (call: { model: string; prompt: string }) => {
+					const times = callTimes.get(call.model) ?? [];
+					times.push(paceNow);
+					callTimes.set(call.model, times);
+					const prompts = callPrompts.get(call.model) ?? [];
+					prompts.push(call.prompt);
+					callPrompts.set(call.model, prompts);
+					return call.prompt === "judge_rubric_v1@1"
+						? {
+								content: '{"pass":true,"score":1,"rationale":"safe"}',
+								costMicroUsd: 1,
+							}
+						: { content: "safe", costMicroUsd: 1 };
+				}),
+		};
+		const admin = {
+			promptSummaries: vi.fn().mockResolvedValue([
+				{
+					id: 1,
+					slug: "safety",
+					latest_version: 2,
+					labels: [
+						{ label: "candidate", version: 2 },
+						{ label: "prod", version: 1 },
+					],
+				},
+			]),
+			upsertDataset: vi.fn().mockResolvedValue({ id: 4 }),
+			createRun: vi.fn().mockResolvedValue(undefined),
+			historicalRuns: vi.fn(),
+		};
+
+		await runEvaluation(
+			{
+				dataset: "safety",
+				prompt: "safety@candidate",
+				baseline: "prod",
+				minRequestIntervalMs: 6_500,
+			},
+			{
+				gateway,
+				admin,
+				loadDataset: vi.fn().mockResolvedValue(scoredDataset),
+				pacingClock: {
+					now: () => paceNow,
+					sleep: async (milliseconds) => {
+						paceNow += milliseconds;
+					},
+				},
+			},
+		);
+
+		for (const times of callTimes.values()) {
+			expect(times).toHaveLength(8);
+			for (let index = 1; index < times.length; index += 1) {
+				const previous = times[index - 1];
+				const current = times[index];
+				if (previous === undefined || current === undefined)
+					throw new Error("Expected paced call timestamps.");
+				expect(current - previous).toBeGreaterThanOrEqual(6_500);
+			}
+		}
+		for (const prompts of callPrompts.values()) {
+			expect(prompts).toContain("safety@1");
+			expect(prompts).toContain("safety@2");
+			expect(prompts).toContain("judge_rubric_v1@1");
+		}
 	});
 });

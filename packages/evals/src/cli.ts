@@ -60,6 +60,7 @@ const optionDefinitions = {
 	help: "boolean",
 	key: "string",
 	"max-score-drop": "string",
+	"min-request-interval-ms": "string",
 	prompt: "string",
 } as const;
 
@@ -73,6 +74,7 @@ const optionsByCommand: Readonly<Record<EvalCommand, readonly string[]>> = {
 		"gateway",
 		"key",
 		"max-score-drop",
+		"min-request-interval-ms",
 		"prompt",
 	],
 	"seed-ci": ["admin-token", "gateway"],
@@ -96,6 +98,7 @@ Run options:
   --admin-token <token>         Admin API token
   --allow-cache                 Allow cache during local development
   --max-score-drop <number>     Maximum acceptable baseline score drop
+  --min-request-interval-ms <n> Opt-in minimum gap per model request
   -h, --help                    Show this help`;
 
 function isCommand(value: string): value is EvalCommand {
@@ -150,7 +153,10 @@ function parseArguments(argv: readonly string[]): {
 		}
 
 		const value = inlineValue ?? argv[index + 1];
-		if (value === undefined || value.startsWith("-")) {
+		if (
+			value === undefined ||
+			(inlineValue === undefined && value.startsWith("-"))
+		) {
 			throw new Error(`Option --${name} requires a value.`);
 		}
 		values[name] = value;
@@ -215,6 +221,22 @@ export async function runCli(
 		if (parsedDrop !== undefined && !Number.isFinite(parsedDrop)) {
 			throw new Error("--max-score-drop must be a finite number.");
 		}
+		const rawRequestInterval =
+			typeof parsed.options["min-request-interval-ms"] === "string"
+				? parsed.options["min-request-interval-ms"]
+				: undefined;
+		const minRequestIntervalMs =
+			rawRequestInterval === undefined ? 0 : Number(rawRequestInterval);
+		if (
+			(rawRequestInterval !== undefined &&
+				!/^(?:0|[1-9][0-9]*)$/.test(rawRequestInterval)) ||
+			!Number.isSafeInteger(minRequestIntervalMs) ||
+			minRequestIntervalMs < 0
+		) {
+			throw new Error(
+				"min-request-interval-ms must be a non-negative safe integer.",
+			);
+		}
 		const modules = await runtime.loadRunModules();
 		const gatewayConfig = modules.resolveGatewayConfig({
 			flags: {
@@ -253,6 +275,7 @@ export async function runCli(
 				baselineFromHistory: parsed.options["baseline-from-history"] === true,
 				allowCache: parsed.options["allow-cache"] === true,
 				maxScoreDrop: parsedDrop,
+				minRequestIntervalMs,
 				gitSha: env.GITHUB_SHA,
 				trigger: env.GITHUB_ACTIONS === "true" ? "ci" : "manual",
 			},

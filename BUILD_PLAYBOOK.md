@@ -324,7 +324,7 @@ Human-approved gate amendment (2026-07-27): Phase 5 runs exactly `gemini-2.5-fla
 
 5. **Judge.** `llmRubric` calls the gateway through the locked cross-provider map: **Gemini target → DeepSeek judge; DeepSeek target → Gemini judge**. It uses registry prompt `judge_rubric_v1@1` (create it via seed script — the rubric prompt is itself versioned, per §7.2), `response_format: {type: "json_object"}`, and parses `{pass, score, rationale}`. Reject every unapproved target model before admin mutation or provider traffic, and reject any self-judge mapping. Malformed judge output = infrastructure error (exit 2), not a case failure.
 
-6. **Run + persist + compare.** At start: resolve every label ref to a concrete version (frozen for the whole run, §7.2) and upsert the dataset via `POST /admin/api/evals/datasets`. Runner creates **one `eval_runs` row per model**, loops that model's cases, persists run + results via `POST /admin/api/evals/runs` (admin token from `--admin-token`/`PG_ADMIN_TOKEN` — eval traffic and persistence use different credentials, §5.2). `--baseline prod` is **paired**: run the baseline ref first, then the candidate, compare within the pair (works in a fresh CI database); `--baseline-from-history` for cheap local iteration only. Apply §7.2's exit-code contract verbatim. Print the markdown summary table (case, model, pass, score, first failed assertion detail).
+6. **Run + persist + compare.** At start: resolve every label ref to a concrete version (frozen for the whole run, §7.2) and upsert the dataset via `POST /admin/api/evals/datasets`. Runner creates **one `eval_runs` row per model**, loops that model's cases, persists run + results via `POST /admin/api/evals/runs` (admin token from `--admin-token`/`PG_ADMIN_TOKEN` — eval traffic and persistence use different credentials, §5.2). `--baseline prod` is **paired**: run the baseline ref first, then the candidate, compare within the pair (works in a fresh CI database); `--baseline-from-history` for cheap local iteration only. `--min-request-interval-ms` is an opt-in per-model request-start pace (default `0`) shared by all target and cross-judge calls for the complete paired run; use `6500` ms for the observed Gemini 10-RPM local quota, and wait 65 seconds unconditionally between the literal Verify's good and deliberately degraded commands. It does not retry, alter cache/budget behavior, or change the dataset/model/exit contract. Apply §7.2's exit-code contract verbatim. Print the markdown summary table (case, model, pass, score, first failed assertion detail).
 
 7. **Golden dataset.** Execute amended §7.3: preserve the recoverable carematch probes, derive additional seeds from the immutable safety policy without calling them verbatim originals, expand with Claude Fable 5 / high, and hand-review every final label. Commit `safety_screening.yaml`, `asserts/*.js`, and `docs/evidence/phase-5-seed-provenance.md` together.
 
@@ -332,9 +332,15 @@ Human-approved gate amendment (2026-07-27): Phase 5 runs exactly `gemini-2.5-fla
 ```bash
 ./node_modules/.bin/pg-eval run --dataset safety_screening \
   --prompt safety_screen@candidate --baseline prod \
-  --gateway http://localhost:8787 --key $KEY --admin-token $ADMIN_TOKEN
+  --gateway http://localhost:8787 --key $KEY --admin-token $ADMIN_TOKEN \
+  --min-request-interval-ms 6500
 echo $?    # 0 on the good prompt
+sleep 65   # unconditional cooldown before the deliberately degraded process
 # now deliberately break the candidate prompt (new version that drops the safety instruction), re-point label:
+./node_modules/.bin/pg-eval run --dataset safety_screening \
+  --prompt safety_screen@candidate --baseline prod \
+  --gateway http://localhost:8787 --key $KEY --admin-token $ADMIN_TOKEN \
+  --min-request-interval-ms 6500
 echo $?    # 1, with a table naming exactly which cases failed
 ```
 Plus the §11 meta-test: fixture dataset + fake provider → assert exact pass/fail/score output.

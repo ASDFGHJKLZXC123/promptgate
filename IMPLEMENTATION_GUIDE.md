@@ -401,11 +401,13 @@ Supported assertion types (v1): `equals`, `contains`, `icontains`, `regex`, `is-
 ./node_modules/.bin/pg-eval run \
   --dataset safety_screening --prompt safety_screen@candidate \
   --baseline prod --gateway http://localhost:8787 \
-  --key $PG_EVAL_KEY --admin-token $PG_ADMIN_TOKEN
+  --key $PG_EVAL_KEY --admin-token $PG_ADMIN_TOKEN \
+  --min-request-interval-ms 6500
 ```
 
 - All eval traffic goes **through the gateway itself** (dogfooding: evals get metered and budgeted like any client) with `pg_no_cache: true` — persisted quality measurements must hit live models or drift stays invisible (`--allow-cache` exists for local harness development only and marks the run `trigger: 'manual'`). The human-approved Phase 5 matrix contains exactly **`gemini-2.5-flash` and `deepseek-v4-flash`** as targets. Judge calls also go through the gateway and cross providers: DeepSeek judges Gemini output, while Gemini judges DeepSeek output. Neither model may judge itself. Each judge uses `response_format: {type: "json_object"}` and the immutable registry prompt `judge_rubric_v1@1`.
 - Phase 5 target and judge requests use `temperature: 0`. Judge requests send no `reasoning_effort`, because that is not part of the approved Gemini/DeepSeek compatibility contract. OpenAI and Anthropic remain supported gateway providers but are not Phase 5 target or judge models. This amendment does not waive Phase 6's separate four-provider requirement.
+- `--min-request-interval-ms` is an opt-in, non-negative safe-integer delay (default `0`; ambient environment values cannot enable it). It applies one shared start-time queue per model across all target and cross-judge calls, including paired baseline and candidate work; it neither retries failures nor changes caching, budgets, datasets, models, or exit codes. Use `6500` for the observed Gemini 10-RPM local quota. The literal Phase 5 Verify waits 65 seconds unconditionally between its good and deliberately degraded commands.
 - Label freezing: at run start, every label ref (`@candidate`, `@prod`) is resolved to a concrete version once; all cases in the run use that version, and it's what `eval_runs.prompt_version` records.
 - One `eval_runs` row per model: N models in the dataset = N runs sharing a `git_sha`, each with its own results (matches the schema's `(run_id, case_id)` key).
 - Deterministic assertions run first and short-circuit; the judge only runs on cases that declare `llm-rubric` — decision #11's cost control.
@@ -454,7 +456,8 @@ jobs:
       - run: >
           ./node_modules/.bin/pg-eval run
           --dataset safety_screening --prompt safety_screen@candidate
-          --baseline prod                            # paired: runs prod then candidate in this fresh DB
+          --baseline prod --min-request-interval-ms 6500
+                                                    # paired: runs prod then candidate in this fresh DB
       - run: ./node_modules/.bin/pg-eval comment   # optional PR summary, needs GITHUB_TOKEN
 ```
 
