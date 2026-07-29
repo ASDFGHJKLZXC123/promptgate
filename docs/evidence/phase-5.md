@@ -401,18 +401,121 @@ verified the exact request/schema boundary, synchronized active authority
 text, historical supersession note, and unchanged Phase 6 scope, and returned
 `APPROVE`. Diff checks were clean.
 
-## Remaining live work
+## Fresh good Verify after the Terra amendment
 
-Commit the approved amendment, rebuild/recreate the gateway from that exact
-commit, create a new disposable $1 key, and rerun the same fresh paired good
-command once. Do not reuse disabled keys 20 or 21 or either partial request
-sequence. Gemini daily quota and OpenAI credential authorization are no longer
-the active blockers.
+The amendment was committed as
+`e47acac9d9eb7e819476ce6597de826fc1464897`. The exact commit was rebuilt as
+image manifest
+`sha256:b22e54cba5c7479bde3db503ee98ff6d9b4578af7970bc3ab3655d7943c859b6`,
+and the gateway returned `{"ok":true}`. Presence-only checks confirmed the
+admin, OpenAI, and DeepSeek credentials without printing their values.
 
-After a fresh good pair completes with exit 0 and persisted evidence, the
-deliberately degraded candidate must be created and run as another fresh pair;
-it must return quality exit 1 with the named failing cases. Checkpoint B1 then
-B2 remain ordered after the completed live Verify.
+A fresh disposable key, ID 22, was created with the required 1,000,000
+micro-USD budget and RPM 1000. The command was invoked exactly once with no
+history reuse, retry, or cache:
+
+```console
+$ ./node_modules/.bin/pg-eval run \
+    --dataset safety_screening \
+    --prompt safety_screen@candidate \
+    --baseline prod \
+    --gateway http://localhost:8787 \
+    --key <redacted> \
+    --admin-token <redacted> \
+    --min-request-interval-ms 15000
+```
+
+The process continued for about 720 seconds instead of failing at the first
+Terra rubric request. The runner's fixed control flow completes the 50-case
+baseline before its next admin operation, `POST /admin/api/evals/runs`.
+That persistence request returned:
+
+```console
+PG_EVAL_STDERR_BEGIN
+Admin request failed with HTTP status 500.
+PG_EVAL_STDERR_END
+PG_EVAL_EXIT=2
+DISPOSABLE_KEY_CLEANUP id=22 disabled=true month_to_date_spend_micro_usd=16206
+```
+
+This live execution resolves the former Terra request-contract blocker. It
+does not complete the good Verify: infrastructure exit 2 is red, no run or
+50-result baseline was persisted, and no summary table was available. No
+second attempt was made.
+
+### Persistence and WAL evidence
+
+While the gateway was running, its admin API exposed key 22 and the accumulated
+16,206-micro-USD spend. After stopping and restarting the gateway, read-only
+admin queries returned:
+
+```json
+{"keys_status":200,"key_count":21,"max_key_id":21,"has_key_22":false,"runs_status":200,"run_count":1,"max_run_id":1}
+```
+
+The host main database therefore remained at the pre-run state: key 22 and its
+request rows were gone, and there was still only the earlier run ID 1 with 50
+results. The restarted gateway returned `{"ok":true}`. The bind-mounted
+sidecars then showed a zero-byte WAL:
+
+```console
+data/promptgate.db      327680 bytes
+data/promptgate.db-shm   32768 bytes
+data/promptgate.db-wal       0 bytes
+```
+
+The shutdown durability defect is proven. Compose bind-mounts `./data` to
+`/data`, `openDatabase` forces WAL, and Fastify's `onClose` closes the
+database, but the production entrypoint installs no SIGTERM/SIGINT handler
+that awaits `server.close()`. Existing Phase 3 evidence already records the
+Docker Desktop/VirtioFS stale/deleted-WAL-descriptor hazard and the need for a
+graceful checkpoint before host SQLite reads.
+
+The precise create-run HTTP 500 cause is **not** proven. The admin route maps
+unexpected DAO exceptions to a generic 500, Fastify logging is disabled, and
+no sanitized SQLite code was retained. WAL I/O or locking is plausible, but a
+constraint, aggregate, or other persistence exception is not excluded.
+Missing signal handling fully explains the later uncheckpointed shutdown
+behavior; it does not by itself establish why the earlier live create-run
+request failed.
+
+### Blocked next action
+
+The smallest proposed correction retains WAL, the schema, and the current bind
+mount; adds once-guarded SIGTERM/SIGINT handling that awaits Fastify close;
+validates a TRUNCATE WAL checkpoint before closing the database; prohibits host
+`sqlite3` reads while the gateway is live; and adds offline 50-result,
+signal-shutdown, and no-provider Docker restart durability gates. If the
+offline create-run gate fails, only a sanitized SQLite error code should be
+captured and work should stop before paid traffic.
+
+That lifecycle change is not yet approved. A new fresh pair would also be
+another paid execution after an infrastructure failure and therefore requires
+explicit owner approval under the locked no-retry rail. Until then, do not
+reuse key 22 or its lost partial sequence, do not create the deliberately
+degraded candidate, do not run checkpoint B1/B2, and do not start Phase 6.
+
+The post-evidence gate remained green:
+
+```console
+$ pnpm lint
+Checked 148 files. No fixes applied.
+
+$ pnpm test
+Test Files  54 passed (54)
+Tests       720 passed (720)
+
+$ pnpm build
+Scope: 4 of 5 workspace projects
+packages/dashboard build: Done
+packages/shared build: Done
+packages/evals build: Done
+packages/gateway build: Done
+```
+
+The first sandboxed full-test process reported five `listen EPERM` failures on
+`127.0.0.1`; all 715 other assertions passed. The identical suite with
+local-loopback permission produced the authoritative 720/720 result above.
 
 The prior persisted-baseline amendment gate was green:
 
