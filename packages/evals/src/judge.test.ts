@@ -161,7 +161,6 @@ describe("gateway rubric judge", () => {
 			model: "gpt-5.6-terra",
 			messages: [],
 			stream: false,
-			temperature: 0,
 			pg_prompt: JUDGE_PROMPT_REF,
 			pg_vars: {
 				payload: JSON.stringify({

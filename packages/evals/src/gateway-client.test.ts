@@ -162,7 +162,7 @@ describe("GatewayClient", () => {
 			["gpt-5.6-luna", 0],
 			["gemini-2.5-flash", 0],
 			["deepseek-v4-flash", 0],
-			["gpt-5.6-terra", 0],
+			["gpt-5.6-terra", undefined],
 			["claude-sonnet-5", undefined],
 		] as const) {
 			const fetcher = vi.fn<FetchLike>().mockResolvedValue(successResponse());
@@ -339,13 +339,14 @@ describe("GatewayClient", () => {
 			responseFormat: { type: "json_object" },
 		});
 		const [, init] = fetcher.mock.calls[0] ?? [];
-		expect(JSON.parse(String(init?.body))).toMatchObject({
-			temperature: 0,
+		const body = JSON.parse(String(init?.body));
+		expect(body).toMatchObject({
 			reasoning_effort: "high",
 			response_format: { type: "json_object" },
 			pg_feature: "eval",
 			pg_no_cache: true,
 		});
+		expect(body).not.toHaveProperty("temperature");
 	});
 
 	test("serializes both structured eval models at zero temperature without an effort override", async () => {

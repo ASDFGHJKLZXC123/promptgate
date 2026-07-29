@@ -230,7 +230,9 @@ export const EvalGatewayRequestSchema = ChatRequestSchema.transform(
 		}
 		if (model.success) {
 			const expectedTemperature =
-				model.data === "claude-sonnet-5" ? undefined : 0;
+				model.data === "claude-sonnet-5" || model.data === "gpt-5.6-terra"
+					? undefined
+					: 0;
 			if (request.temperature !== expectedTemperature) {
 				issue("Eval request temperature violates the pinned model policy.", [
 					"temperature",

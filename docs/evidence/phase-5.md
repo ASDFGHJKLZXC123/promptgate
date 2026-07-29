@@ -2,13 +2,11 @@
 
 Date: 2026-07-28
 
-Status: **incomplete — an authorized replacement OpenAI key can list
-`gpt-5.6-terra`, but the fresh Terra-judged good Verify still stopped at
-infrastructure exit 2 on its first Terra request; no Terra judgment or new
-eval run persisted**. Official OpenAI documentation and the exact checked-in
-request make the approved `temperature: 0` override the strongest identified
-compatibility suspect, but the sanitized gateway record does not prove the
-upstream error message. Completed baseline run ID 1 remains useful historical
+Status: **incomplete — the owner-approved Terra temperature omission is
+implemented and offline-green; the fresh paired good Verify has not yet been
+rerun from the amended commit**. Only `gpt-5.6-terra` now omits temperature;
+DeepSeek retains temperature zero, and every other active Phase 5 invariant is
+unchanged. Completed baseline run ID 1 remains useful historical
 Gemini-judged evidence but is not comparable with the owner-approved Terra
 gate. Phase 5 remains verify-pending. The degraded prompt and degraded command
 have not been created or run.
@@ -334,7 +332,7 @@ The documentation-only evidence gate passed:
 
 ```console
 $ pnpm lint
-Checked 147 files. No fixes applied.
+Checked 148 files. No fixes applied.
 
 $ pnpm test
 Test Files  53 passed (53)
@@ -351,15 +349,63 @@ packages/gateway build: Done
 The first sandboxed test process reported five `listen EPERM` failures on
 `127.0.0.1`; the identical permitted local-loopback rerun above was green.
 
+## Owner-approved Terra temperature amendment
+
+The project owner approved the narrow correction after reviewing the
+replacement-key evidence:
+
+- omit `temperature` only for `gpt-5.6-terra`;
+- retain `reasoning_effort: "high"`, JSON-object output, immutable
+  `judge_rubric_v1@1`, and no cache;
+- retain `temperature: 0` for the sole DeepSeek target;
+- preserve all 50 cases, seven rubrics, fresh paired execution without history
+  reuse, 15-second pacing, disposable $1 keys, no retries or self-judging,
+  persistence/table/exit contracts, and Phase 6 unchanged.
+
+The eval request builder and its shared Zod request policy now make Terra and
+the existing Claude exception the only pinned eval models for which
+temperature must be absent. DeepSeek, Gemini, and Luna remain pinned to zero.
+Discriminating shared-policy, client, and real-judge tests assert both valid
+pairs and reject Terra-at-zero plus DeepSeek-without-temperature. The project
+idea, implementation guide, playbook, orchestration rail, progress record, and
+this evidence record carry the same active contract; historical entries remain
+unchanged as history.
+
+No provider call, Docker operation, database/admin mutation, dataset change,
+degraded prompt, history reuse, or Phase 6 work occurred while implementing
+the amendment. The offline gate passed:
+
+```console
+$ pnpm exec vitest run packages/shared/src/eval-policy.test.ts \
+    packages/evals/src/gateway-client.test.ts packages/evals/src/judge.test.ts
+Test Files  3 passed (3)
+Tests       36 passed (36)
+
+$ pnpm lint
+Checked 147 files. No fixes applied.
+
+$ pnpm test
+Test Files  54 passed (54)
+Tests       720 passed (720)
+
+$ pnpm build
+Scope: 4 of 5 workspace projects
+packages/dashboard build: Done
+packages/shared build: Done
+packages/evals build: Done
+packages/gateway build: Done
+```
+
+GPT-5.6 Sol / xhigh independently passed 89 tests across eight focused files,
+verified the exact request/schema boundary, synchronized active authority
+text, historical supersession note, and unchanged Phase 6 scope, and returned
+`APPROVE`. Diff checks were clean.
+
 ## Remaining live work
 
-Do not retry the good Verify until the owner approves or rejects a narrow Terra
-request amendment. The recommended amendment omits `temperature` only for
-`gpt-5.6-terra` while retaining high reasoning effort, JSON-object output, the
-immutable judge prompt, no cache, and every other Phase 5 invariant. If
-approved, implement and offline-verify that amendment, rebuild/recreate the
-gateway, create a new disposable $1 key, and rerun the same fresh paired
-command. Do not reuse disabled keys 20 or 21 or either partial request
+Commit the approved amendment, rebuild/recreate the gateway from that exact
+commit, create a new disposable $1 key, and rerun the same fresh paired good
+command once. Do not reuse disabled keys 20 or 21 or either partial request
 sequence. Gemini daily quota and OpenAI credential authorization are no longer
 the active blockers.
 

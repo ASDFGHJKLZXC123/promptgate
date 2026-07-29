@@ -34,7 +34,6 @@ export const EVAL_TEMPERATURE_MODELS = [
 	"gpt-5.6-luna",
 	"gemini-2.5-flash",
 	"deepseek-v4-flash",
-	"gpt-5.6-terra",
 ] as const;
 
 export { EVAL_MODELS };
@@ -187,7 +186,10 @@ export function temperatureForEvalModel(model: string): 0 | undefined {
 	if (!parsedModel.success) {
 		throw new GatewayConfigError(`Unsupported eval model: ${model}.`);
 	}
-	return parsedModel.data === "claude-sonnet-5" ? undefined : 0;
+	return parsedModel.data === "claude-sonnet-5" ||
+		parsedModel.data === "gpt-5.6-terra"
+		? undefined
+		: 0;
 }
 
 /** Convert a gateway decimal-dollar header to exact, safe integer micro-USD. */
