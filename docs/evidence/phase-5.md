@@ -2,12 +2,16 @@
 
 Date: 2026-07-28
 
-Status: **incomplete — the fresh Terra-judged good Verify stopped at
-infrastructure exit 2 because OpenAI rejected the rotated key with HTTP 401;
-no Terra judgment or new eval run persisted**. Completed baseline run ID 1
-remains useful historical Gemini-judged evidence but is not comparable with
-the owner-approved Terra gate. Phase 5 remains verify-pending. The degraded
-prompt and degraded command have not been created or run.
+Status: **incomplete — an authorized replacement OpenAI key can list
+`gpt-5.6-terra`, but the fresh Terra-judged good Verify still stopped at
+infrastructure exit 2 on its first Terra request; no Terra judgment or new
+eval run persisted**. Official OpenAI documentation and the exact checked-in
+request make the approved `temperature: 0` override the strongest identified
+compatibility suspect, but the sanitized gateway record does not prove the
+upstream error message. Completed baseline run ID 1 remains useful historical
+Gemini-judged evidence but is not comparable with the owner-approved Terra
+gate. Phase 5 remains verify-pending. The degraded prompt and degraded command
+have not been created or run.
 
 ## Prior committed Gemini-judge attempt
 
@@ -249,13 +253,115 @@ Terra request options are accepted. No retry was made. No new `eval_runs` or
 gateway requests and 100 micro-USD. No degraded prompt, Gemini call, history
 reuse, or Phase 6 work occurred.
 
+## Replacement-key live attempt — Terra request-contract blocker
+
+The owner then confirmed another replacement key. Before any generation call,
+one presence-safe OpenAI model-list request succeeded:
+
+```json
+{"http_status":200,"content_type":"application/json","model_found":true,"model_count":127}
+```
+
+This establishes that the replacement credential was authorized and that its
+model list included `gpt-5.6-terra`. The gateway was rebuilt and force-recreated
+from clean commit `6d6244b232f2490816b03a6399ff51c45d59fa19`:
+
+```console
+Image promptgate-gateway Built
+manifest list sha256:1b00aa7215d0f4f039b294a770f02a4596f325e7ed6b5cd74d769346f9c9bbf6
+Container promptgate-gateway-1 Recreated
+Container promptgate-gateway-1 Healthy
+
+$ curl -fsS http://127.0.0.1:8787/healthz
+{"ok":true}
+```
+
+Presence-only checks again found OpenAI, DeepSeek, and admin credentials inside
+the container. The immutable judge prompt remained ID 2/version 1, and both
+`safety_screen` labels remained prompt ID 3/version 1. Disposable key ID 21 was
+created with exactly 1,000,000 micro-USD monthly budget and RPM 1000. The same
+literal fresh-pair command was run once:
+
+```bash
+./node_modules/.bin/pg-eval run --dataset safety_screening \
+  --prompt safety_screen@candidate --baseline prod \
+  --gateway http://localhost:8787 --key "$KEY" --admin-token "$ADMIN_TOKEN" \
+  --min-request-interval-ms 15000
+```
+
+Captured output:
+
+```console
+Rubric evaluator failed.
+PG_EVAL_EXIT=2
+DISPOSABLE_KEY_CLEANUP id=21 disabled=true month_to_date_spend_micro_usd=49
+```
+
+The durable request rows and cleanup state were:
+
+```console
+id   provider  model              status          input  output  cost_micro_usd  total_ms  prompt_id  prompt_version
+165  deepseek  deepseek-v4-flash  ok              399    163     49              2201      3          1
+166  openai    gpt-5.6-terra      provider_error  —      —       —               2405      2          1
+
+key_id  budget_micro_usd_month  rate_limit_rpm  disabled
+21      1000000                 1000            1
+```
+
+No eval run exists for commit `6d6244b`; database totals remain one earlier
+run and 50 results. Both safety labels remain at v1.
+
+The checked-in request builder sends the Terra judge `temperature: 0`,
+`reasoning_effort: "high"`, JSON-object output, the immutable judge prompt, and
+no cache. OpenAI's
+[Terra model page](https://developers.openai.com/api/docs/models/gpt-5.6-terra)
+classifies it as a reasoning model and lists Chat Completions and structured
+outputs as supported. The
+[GPT-5.6 parameter guide](https://developers.openai.com/api/docs/guides/latest-model#update-api-and-model-parameters)
+lists high reasoning effort as supported. OpenAI's
+[model-grader constraints](https://developers.openai.com/api/docs/guides/graders#model-grader-constraints)
+state that temperature changes are unsupported for reasoning models.
+
+Those documented capabilities leave the forced temperature override as the
+strongest identified incompatibility. That conclusion is an inference, not a
+captured upstream fact: the gateway intentionally persists only the sanitized
+`provider_error`, and no provider body or HTTP status was retained for row 166.
+Changing the approved Terra wire contract requires owner approval. No retry,
+direct diagnostic generation, degraded prompt, history reuse, Gemini call, or
+Phase 6 work occurred.
+
+The documentation-only evidence gate passed:
+
+```console
+$ pnpm lint
+Checked 147 files. No fixes applied.
+
+$ pnpm test
+Test Files  53 passed (53)
+Tests       719 passed (719)
+
+$ pnpm build
+Scope: 4 of 5 workspace projects
+packages/dashboard build: Done
+packages/shared build: Done
+packages/evals build: Done
+packages/gateway build: Done
+```
+
+The first sandboxed test process reported five `listen EPERM` failures on
+`127.0.0.1`; the identical permitted local-loopback rerun above was green.
+
 ## Remaining live work
 
-Replace `OPENAI_API_KEY` in the gitignored `.env` with an active key that
-OpenAI authorizes. After the owner confirms replacement, rebuild/recreate the
+Do not retry the good Verify until the owner approves or rejects a narrow Terra
+request amendment. The recommended amendment omits `temperature` only for
+`gpt-5.6-terra` while retaining high reasoning effort, JSON-object output, the
+immutable judge prompt, no cache, and every other Phase 5 invariant. If
+approved, implement and offline-verify that amendment, rebuild/recreate the
 gateway, create a new disposable $1 key, and rerun the same fresh paired
-command. Do not reuse disabled key 20 or the partial request sequence. Gemini
-daily quota is no longer a blocker for the active Phase 5 gate.
+command. Do not reuse disabled keys 20 or 21 or either partial request
+sequence. Gemini daily quota and OpenAI credential authorization are no longer
+the active blockers.
 
 After a fresh good pair completes with exit 0 and persisted evidence, the
 deliberately degraded candidate must be created and run as another fresh pair;
@@ -333,6 +439,7 @@ During preflight, shell-sourcing the gitignored `.env` encountered a
 shell-incompatible OpenAI entry and emitted that OpenAI value in a local
 command error. It was not committed, persisted in this evidence, or sent to a
 provider. All subsequent commands used Node's dotenv loader and presence-only
-output. The owner confirmed that the exposed key was rotated before this
-amendment's live Terra call, but OpenAI returned HTTP 401 for the replacement.
-The replacement value was not printed or persisted in this evidence.
+output. The owner confirmed that the exposed key was rotated before the first
+Terra call. A later replacement authenticated successfully and listed Terra,
+but its first rubric request failed under the approved request contract.
+Neither replacement value was printed or persisted in this evidence.
