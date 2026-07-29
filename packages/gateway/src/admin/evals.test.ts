@@ -2,6 +2,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { openDatabase } from "../db/index.js";
 
 const ADMIN_TOKEN = "promptgate-evals-admin-token";
 const HASH = "a".repeat(64);
@@ -87,6 +88,53 @@ function runBody(datasetId: number) {
 	};
 }
 
+function fiftyResultRunBody(datasetId: number) {
+	const rubrics = [
+		["b", 0.92],
+		["c", 0.86],
+		["e", 0.89],
+		["g", 0.89],
+		["f", 0.84],
+		["a", 0.99],
+		["d", 0.99],
+	] as const;
+	const results = [
+		...rubrics.map(([caseId, score], index) => ({
+			case_id: caseId,
+			passed: true,
+			score,
+			detail_json: { case_number: index + 1 },
+			latency_ms: 20 + index,
+			cost_micro_usd: 3,
+		})),
+		...Array.from({ length: 43 }, (_, index) => ({
+			case_id: `z${String(index + 1).padStart(2, "0")}`,
+			passed: false,
+			score: null,
+			detail_json: { case_number: index + 8 },
+			latency_ms: 27 + index,
+			cost_micro_usd: 3,
+		})),
+	];
+	return {
+		...runBody(datasetId),
+		model: "deepseek-v4-flash",
+		cases_total: results.length,
+		cases_passed: results.filter((result) => result.passed).length,
+		score_avg:
+			results
+				.filter((result) => result.score !== null)
+				.reduce((total, result) => total + result.score, 0) /
+			results.filter((result) => result.score !== null).length,
+		cost_micro_usd: results.length * 3,
+		duration_ms: results.reduce(
+			(total, result) => total + result.latency_ms,
+			0,
+		),
+		results,
+	};
+}
+
 describe("admin eval persistence API", () => {
 	test("requires the existing admin token", async () => {
 		const server = await buildTestServer();
@@ -165,6 +213,98 @@ describe("admin eval persistence API", () => {
 				},
 				results: expect.any(Array),
 			});
+		} finally {
+			await server.close();
+		}
+	});
+
+	test("atomically persists a production-sized fifty-result eval run", async () => {
+		const server = await buildTestServer();
+		let serverClosed = false;
+		try {
+			const dataset = (await createDataset(server)).json() as { id: number };
+			const response = await server.inject({
+				method: "POST",
+				url: "/admin/api/evals/runs",
+				headers: headers(),
+				body: JSON.stringify(fiftyResultRunBody(dataset.id)),
+			});
+			expect(response.statusCode).toBe(201);
+			const payload = response.json() as {
+				run: { cases_total: number; cases_passed: number };
+				results: Array<{ case_id: string; detail_json: unknown }>;
+			};
+			expect(payload.run).toMatchObject({
+				cases_total: 50,
+				cases_passed: 7,
+			});
+			expect(payload.results).toHaveLength(50);
+			expect(payload.results[0]).toMatchObject({
+				case_id: "a",
+				detail_json: { case_number: 6 },
+			});
+			await server.close();
+			serverClosed = true;
+			const durableDb = openDatabase(process.env.DB_PATH as string);
+			try {
+				expect(
+					durableDb.prepare("SELECT COUNT(*) AS count FROM eval_runs").get(),
+				).toEqual({ count: 1 });
+				expect(
+					durableDb.prepare("SELECT COUNT(*) AS count FROM eval_results").get(),
+				).toEqual({ count: 50 });
+			} finally {
+				durableDb.close();
+			}
+		} finally {
+			if (!serverClosed) await server.close();
+		}
+	});
+
+	test("rejects a score average that differs by one billionth", async () => {
+		const server = await buildTestServer();
+		try {
+			const dataset = (await createDataset(server)).json() as { id: number };
+			const body = runBody(dataset.id);
+			body.score_avg += 1e-9;
+			const response = await server.inject({
+				method: "POST",
+				url: "/admin/api/evals/runs",
+				headers: headers(),
+				body: JSON.stringify(body),
+			});
+			expect(response.statusCode).toBe(400);
+			expect(response.json()).toMatchObject({
+				error: { code: "invalid_request_error" },
+			});
+		} finally {
+			await server.close();
+		}
+	});
+
+	test("requires a null average exactly when every result score is null", async () => {
+		const server = await buildTestServer();
+		try {
+			const dataset = (await createDataset(server)).json() as { id: number };
+			const allNullScores = { ...runBody(dataset.id), score_avg: null };
+			for (const result of allNullScores.results) result.score = undefined;
+			const accepted = await server.inject({
+				method: "POST",
+				url: "/admin/api/evals/runs",
+				headers: headers(),
+				body: JSON.stringify(allNullScores),
+			});
+			expect(accepted.statusCode).toBe(201);
+
+			const nonNullAverage = runBody(dataset.id);
+			for (const result of nonNullAverage.results) result.score = undefined;
+			const rejected = await server.inject({
+				method: "POST",
+				url: "/admin/api/evals/runs",
+				headers: headers(),
+				body: JSON.stringify(nonNullAverage),
+			});
+			expect(rejected.statusCode).toBe(400);
 		} finally {
 			await server.close();
 		}

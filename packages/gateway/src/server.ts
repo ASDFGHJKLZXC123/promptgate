@@ -6,6 +6,7 @@ import { registerAdminRoutes } from "./admin/keys.js";
 import { registerPromptAdminRoutes } from "./admin/prompts.js";
 import { config } from "./config.js";
 import { openDatabase } from "./db/index.js";
+import { closeDatabaseAfterWalCheckpoint } from "./db/lifecycle.js";
 import { migrate } from "./db/migrate.js";
 import { registerClientAuth } from "./pipeline/auth.js";
 import { sumCurrentMonthSettledSpend } from "./pipeline/budget.dao.js";
@@ -122,7 +123,7 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
 
 	server.addHook("onClose", async () => {
 		clearInterval(cacheSweep);
-		db.close();
+		closeDatabaseAfterWalCheckpoint(db);
 	});
 
 	return server;

@@ -1,6 +1,6 @@
 # PromptGate — Implementation Guide
 
-Companion to `PromptGate_PROJECT_IDEA.md`. All 17 locked decisions (2026-07-12) are treated as fixed except the human-approved amendments recorded in `PROGRESS.md`: decision #2 expanded to OpenAI, Anthropic, Gemini, and DeepSeek on 2026-07-25; decision #12 received the verified carematch provenance correction on 2026-07-26; and decision #11 now makes DeepSeek V4 Flash the sole Phase 5 target with GPT-5.6 Terra as its independent high-effort judge. The 2026-07-28 comparability amendment supersedes the earlier Gemini-judge persisted-baseline live path: Phase 5 Verify freshly pairs baseline and candidate under Terra because persisted eval rows do not record judge identity. `GEMINI_API_KEY`/`DEEPSEEK_API_KEY` join the optional-at-boot provider keys (§1's config, BUILD_PLAYBOOK.md phase 1 step 9). The carematch `TODO(verify)` is resolved in §7.3 from the immutable public source plus retained build-session evidence; `web_builder_llm` references still carry `TODO(verify)` markers to confirm against the finished repository when their phases consume them.
+Companion to `PromptGate_PROJECT_IDEA.md`. All 17 locked decisions (2026-07-12) are treated as fixed except the human-approved amendments recorded in `PROGRESS.md`: decision #2 expanded to OpenAI, Anthropic, Gemini, and DeepSeek on 2026-07-25; decision #12 received the verified carematch provenance correction on 2026-07-26; and decision #11 now makes DeepSeek V4 Flash the sole Phase 5 target with GPT-5.6 Terra as its independent high-effort judge. The 2026-07-28 comparability amendment supersedes the earlier Gemini-judge persisted-baseline live path: Phase 5 Verify freshly pairs baseline and candidate under Terra because persisted eval rows do not record judge identity. The later SQLite lifecycle amendment retains WAL and the existing bind mount while requiring awaited graceful signal shutdown, a validated TRUNCATE checkpoint, and offline/Docker durability gates before another paid Phase 5 run. `GEMINI_API_KEY`/`DEEPSEEK_API_KEY` join the optional-at-boot provider keys (§1's config, BUILD_PLAYBOOK.md phase 1 step 9). The carematch `TODO(verify)` is resolved in §7.3 from the immutable public source plus retained build-session evidence; `web_builder_llm` references still carry `TODO(verify)` markers to confirm against the finished repository when their phases consume them.
 
 ---
 
@@ -15,7 +15,7 @@ These were not in the locked decisions; defaults chosen for lowest friction with
 | TS config | `strict: true`, ESM | shared `tsconfig.base.json` |
 | Lint/format | Biome | one tool, one config |
 | Tests | Vitest | unit + integration |
-| DB driver | better-sqlite3 (sync) | prior experience (AI_reading_assistant); WAL mode; tiny hand-rolled migration runner (numbered `.sql` files) — no ORM |
+| DB driver | better-sqlite3 (sync) | prior experience (AI_reading_assistant); WAL mode with validated graceful checkpoint/close; tiny hand-rolled migration runner (numbered `.sql` files) — no ORM |
 | Validation | Zod | request schemas + env config |
 | Templating (prompts) | mustache-lite: `{{var}}` only, no logic | implemented in ~30 lines, not a dependency |
 | Dashboard front-end | Vite + vanilla TS + Chart.js (bundled by Vite, pinned version — no runtime CDN dependency) | built to static assets, served by gateway |
@@ -144,7 +144,11 @@ All errors leave the gateway in OpenAI error format (`{"error": {"message", "typ
 
 ## 4. Data model (SQLite, WAL mode; decision #5)
 
-Migrations are numbered SQL files run at startup. SQLite does **not** enforce foreign keys by default — the DB module must run `db.pragma("foreign_keys = ON")` on every connection, right after the WAL pragma. All money columns are integer micro-USD (§1). Full schema:
+Migrations are numbered SQL files run at startup. SQLite does **not** enforce foreign keys by default — the DB module must run `db.pragma("foreign_keys = ON")` on every connection, right after the WAL pragma. All money columns are integer micro-USD (§1).
+
+The production WAL lifecycle is explicit. SIGTERM and SIGINT share one guarded shutdown promise that awaits Fastify close. The close hook clears background work, runs `PRAGMA wal_checkpoint(TRUNCATE)`, validates exactly one safe-integer result row with `{busy: 0, log: 0, checkpointed: 0}`, and closes the database in `finally`; a checkpoint failure remains the primary shutdown error even if close also fails. Compose allows 150 seconds for the default 120-second upstream timeout plus checkpoint margin; raise both together if the upstream timeout is increased. Never open the bind-mounted database with host `sqlite3` while the gateway is running: use the admin API or an in-container Linux-side reader, then use host SQLite only after a verified graceful stop.
+
+Full schema:
 
 ```sql
 -- 001_core.sql
@@ -409,6 +413,7 @@ Supported assertion types (v1): `equals`, `contains`, `icontains`, `regex`, `is-
 - `--min-request-interval-ms` is an opt-in, non-negative safe-integer delay (default `0`; ambient environment values cannot enable it). It applies one shared start-time queue per model across all target and judge calls in each paired command; it neither retries failures nor changes caching, budgets, datasets, models, or exit codes. Use `15000` for the DeepSeek-led gate. Each paired command can invoke up to fourteen Terra rubric judgments: seven for the fresh baseline and seven for the candidate.
 - Label freezing: at run start, every label ref (`@candidate`, `@prod`) is resolved to a concrete version once; all cases in the run use that version, and it's what `eval_runs.prompt_version` records.
 - One `eval_runs` row per model: N models in the dataset = N runs sharing a `git_sha`, each with its own results (matches the schema's `(run_id, case_id)` key).
+- Eval aggregate validation uses one shared, count-scaled IEEE-754 comparison for `score_avg`: `abs(expected - computed) <= Number.EPSILON × max(1, scored_result_count) × max(1, abs(expected), abs(computed))`. This admits only addition-order roundoff when request-order results are reread in case-ID order. Null remains exact iff no result has a score; case count, pass count, and integer micro-USD cost remain exact.
 - Deterministic assertions run first and short-circuit; the judge only runs on cases that declare `llm-rubric` — decision #11's cost control.
 - Baseline comparison for the active Phase 5 gate is **freshly paired**: `--baseline prod` runs the baseline ref first, then the candidate, and compares only scores produced under the same Terra judge. Do **not** pass `--baseline-from-history` in either Phase 5 Verify command. Baseline run ID 1 remains valid evidence of the earlier Gemini-judged attempt, but it is not score-comparable with Terra output because `eval_runs` does not persist judge identity. The hardened historical lookup remains a general runner feature with exact dataset/prompt/model/case matching; it is simply not authorized for this gate. This amendment does not change the paired Phase 6 CI sketch.
 - Exit code contract (this is the CI gate):
@@ -500,7 +505,8 @@ The phase-by-phase playbook — ordered steps, exact files, commands, key code, 
 ## 11. Testing strategy
 
 - **Unit (per PR, no network):** all four provider adapters against provider-specific recorded/official-contract fixtures (checked-in non-streaming JSON plus SSE transcripts); template engine; cache-key canonicalization (property test: key order / whitespace never changes hash); ordinary and cache-split cost math against pricing-table edge dates.
-- **Integration (per PR, no network):** Fastify app with injected **fake adapters** for all four normalized provider paths — full pipeline tests: auth → budget → cache → log, streaming included. This is most of the confidence.
+- **Integration (per PR, no network):** Fastify app with injected **fake adapters** for all four normalized provider paths — full pipeline tests: auth → budget → cache → log, streaming included. Persist one production-sized 50-result eval payload with seven nontrivial rubric scores whose request order differs from case-ID order, close/reopen the database, and prove one run plus all 50 results survive. Unit-test that SIGTERM and SIGINT share one guarded close promise, then spawn the production source entrypoint, write through the admin API, send SIGTERM, and prove the checkpointed main file plus restarted API retain all 50 results. This is most of the confidence.
+- **Docker durability canary (before paid Phase 5 verification):** against a temporary bind-mounted database and the exact built image, make a no-provider admin write, stop gracefully, inspect the host main file only after exit, restart the same image, and confirm the row through the admin API. Provider keys may be present in the environment but no chat route is called.
 - **Contract (nightly, live, tiny):** `contract-nightly.yml` (created in playbook phase 8, step 6 — explicitly deferred until then) sends one minimal streaming + one non-streaming request per provider with pinned cheap models and asserts response shape against the adapter's Zod schemas. Drift → red badge before it breaks a workday. This closes the idea file's "contract testing against provider APIs" bonus concept.
 - **Eval-of-the-evals:** one meta test — run `pg-eval` against a fixture dataset with a fake provider that returns known outputs, assert exact pass/fail/score results. The gate must itself be tested or it will be quietly wrong.
 
@@ -523,7 +529,7 @@ The phase-by-phase playbook — ordered steps, exact files, commands, key code, 
 | CI cost runaway | $1 circuit-breaker gateway budget enforced by reserve-then-reconcile (§3.5); dedicated CI provider keys carry provider-side spend limits as the absolute outer wall |
 | web_builder_llm needs tool calls (adapter gap) | resolve the `TODO(verify)` in phase 2, not phase 8; backup dogfood app named |
 | Scope creep toward SaaS (multi-tenant, orgs, SSO) | scope guard is in the idea file; admin auth stays a single env token by decision #15 |
-| SQLite write contention under load | WAL mode, single process, request logging is the only hot write path and it's one insert — fine for single-tenant reality |
+| SQLite WAL loss or split state on Docker Desktop bind mounts | one process; guarded SIGTERM/SIGINT shutdown; validated TRUNCATE checkpoint before close; stop grace longer than the upstream timeout; no host SQLite access while live; signal and no-provider Docker restart durability gates |
 
 ## 14. Where to start
 

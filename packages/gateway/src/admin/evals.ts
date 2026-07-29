@@ -11,6 +11,7 @@ import {
 	listEvalRuns,
 	upsertEvalDataset,
 } from "../evals/dao.js";
+import { scoreAverageMatches } from "../evals/score.js";
 
 const nonEmpty = z.string().trim().min(1);
 const safeNonNegativeInteger = z.number().int().nonnegative().safe();
@@ -196,18 +197,14 @@ const runBodySchema = z
 				code: "custom",
 				message: "score_avg must be null exactly when no result has a score.",
 			});
-		} else if (scores.length > 0) {
-			const average =
-				scores.reduce((sum, score) => sum + score, 0) / scores.length;
-			if (
-				Math.abs((run.score_avg ?? 0) - average) >
-				Number.EPSILON * Math.max(1, Math.abs(average))
-			) {
-				ctx.addIssue({
-					code: "custom",
-					message: "score_avg must equal the arithmetic mean of result scores.",
-				});
-			}
+		} else if (
+			scores.length > 0 &&
+			!scoreAverageMatches(run.score_avg ?? 0, scores)
+		) {
+			ctx.addIssue({
+				code: "custom",
+				message: "score_avg must equal the arithmetic mean of result scores.",
+			});
 		}
 		const totalCost = run.results.reduce(
 			(sum, result) => sum + (result.cost_micro_usd ?? 0),

@@ -479,21 +479,73 @@ Missing signal handling fully explains the later uncheckpointed shutdown
 behavior; it does not by itself establish why the earlier live create-run
 request failed.
 
-### Blocked next action
+### Owner-approved SQLite WAL lifecycle amendment
 
-The smallest proposed correction retains WAL, the schema, and the current bind
-mount; adds once-guarded SIGTERM/SIGINT handling that awaits Fastify close;
-validates a TRUNCATE WAL checkpoint before closing the database; prohibits host
-`sqlite3` reads while the gateway is live; and adds offline 50-result,
-signal-shutdown, and no-provider Docker restart durability gates. If the
-offline create-run gate fails, only a sanitized SQLite error code should be
-captured and work should stop before paid traffic.
+The project owner approved the narrow correction and exactly one new fresh
+good Verify after every offline and Docker durability gate is green:
 
-That lifecycle change is not yet approved. A new fresh pair would also be
-another paid execution after an infrastructure failure and therefore requires
-explicit owner approval under the locked no-retry rail. Until then, do not
-reuse key 22 or its lost partial sequence, do not create the deliberately
-degraded candidate, do not run checkpoint B1/B2, and do not start Phase 6.
+- retain WAL, the schema, and the current bind mount;
+- make SIGTERM and SIGINT share one awaited Fastify shutdown;
+- validate a successful TRUNCATE checkpoint and close the database in
+  `finally`, retaining a checkpoint error as primary;
+- set Compose stop grace beyond the upstream timeout;
+- prohibit host `sqlite3` while the gateway is live;
+- add production-sized 50-result persistence/reopen, signal/main-file, and
+  no-provider Docker write/stop/read/restart gates;
+- preserve every DeepSeek/Terra, dataset, rubric, pacing, cache, retry, budget,
+  persistence, exit-code, and Phase 6 contract.
+
+The new 50-result regression reproduced a second, pre-existing path to the
+observed generic 500. The runner and request schema calculate `score_avg` in
+request order, but DAO confirmation rereads results in case-ID order. Seven
+ordinary decimal rubric scores produced `0.9114285714285716` in request order
+and `0.9114285714285713` after the reorder; the old one-epsilon comparison
+rejected that mathematically equivalent mean and rolled back the transaction.
+This is a concrete plausible explanation for the lost live create-run, not
+proof that key 22 had those unrecoverable scores.
+
+The bounded correction uses one request/DAO helper whose tolerance is
+`Number.EPSILON × scored_result_count × max(1, abs(expected), abs(computed))`.
+Null remains exact iff there are no scored results; case count, pass count, and
+integer micro-USD totals remain exact. A one-billionth mismatch remains red.
+
+No provider call is authorized until the corrected offline suite, independent
+audit, exact committed-image build, and no-provider Docker durability canary
+all pass. Key 22 and its lost partial sequence remain unusable. The degraded
+candidate/run, checkpoint B1/B2, and Phase 6 remain strictly later work.
+
+The corrected offline gate passed:
+
+```console
+$ pnpm exec vitest run packages/gateway/src/db/lifecycle.test.ts \
+    packages/gateway/src/shutdown.test.ts \
+    packages/gateway/src/admin/evals.test.ts \
+    packages/gateway/src/index.test.ts
+Test Files  4 passed (4)
+Tests       30 passed (30)
+
+$ pnpm lint
+Checked 154 files. No fixes applied.
+
+$ pnpm test
+Test Files  57 passed (57)
+Tests       741 passed (741)
+
+$ pnpm build
+Scope: 4 of 5 workspace projects
+packages/dashboard build: Done
+packages/shared build: Done
+packages/evals build: Done
+packages/gateway build: Done
+```
+
+The focused and complete suites ran with local-loopback permission because the
+new child-process durability test and five existing streaming tests bind
+temporary `127.0.0.1` sockets. GPT-5.6 Sol / xhigh independently checked the
+signal guard, checkpoint result/error precedence, 150-second stop grace,
+50-result and one-billionth discriminators, main-file/restart proof, score
+bound, strict types, secrets, authority synchronization, and unchanged Phase 6
+scope, then returned `APPROVE`.
 
 The post-evidence gate remained green:
 
@@ -592,3 +644,11 @@ output. The owner confirmed that the exposed key was rotated before the first
 Terra call. A later replacement authenticated successfully and listed Terra,
 but its first rubric request failed under the approved request contract.
 Neither replacement value was printed or persisted in this evidence.
+
+During the WAL amendment's final read-only Compose syntax check,
+`docker compose config` expanded the gitignored `.env` values into local
+command output. No value was committed, copied into this record, or used for a
+later provider request. Treat `ADMIN_TOKEN` and every configured provider key
+as exposed and rotate them in `.env` before the authorized paid good Verify.
+The intervening Docker durability canary must receive only an isolated local
+admin value and no provider credential.

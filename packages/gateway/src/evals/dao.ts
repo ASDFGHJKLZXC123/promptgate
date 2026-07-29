@@ -1,4 +1,5 @@
 import type Database from "better-sqlite3";
+import { scoreAverageMatches } from "./score.js";
 
 export type JsonValue =
 	| boolean
@@ -245,18 +246,12 @@ function assertStoredAggregates(
 		(sum, result) => sum + (result.cost_micro_usd ?? 0),
 		0,
 	);
-	const average =
-		scores.length === 0
-			? null
-			: scores.reduce((sum, score) => sum + score, 0) / scores.length;
 	if (
 		run.cases_total !== results.length ||
 		run.cases_passed !== passed ||
 		run.cost_micro_usd !== cost ||
-		(run.score_avg === null) !== (average === null) ||
-		(average !== null &&
-			Math.abs((run.score_avg ?? 0) - average) >
-				Number.EPSILON * Math.max(1, Math.abs(average)))
+		(run.score_avg === null) !== (scores.length === 0) ||
+		(scores.length > 0 && !scoreAverageMatches(run.score_avg ?? 0, scores))
 	) {
 		throw new Error("Stored eval run aggregates do not match its results");
 	}

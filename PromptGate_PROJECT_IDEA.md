@@ -23,7 +23,7 @@ A self-hosted **model gateway** (multi-provider routing — already a mastered p
 ## Scope guard
 4 providers (amended 2026-07-25, see decision #2), 1 golden dataset (reuse a task from an existing app — e.g. carematch_ai's safety screening), 1 CI gate. Not a SaaS: single-tenant, self-hosted.
 
-## Decisions (locked 2026-07-12; amended 2026-07-15 after human-approved plan reviews, 2026-07-25 for the four-provider scope, 2026-07-26 for decision #12 provenance, 2026-07-27 for the Phase 5 decision #11 gate, and 2026-07-28 for the Phase 5 Terra-judge comparability gate — see PROGRESS.md decision log)
+## Decisions (locked 2026-07-12; amended 2026-07-15 after human-approved plan reviews, 2026-07-25 for the four-provider scope, 2026-07-26 for decision #12 provenance, 2026-07-27 for the Phase 5 decision #11 gate, and 2026-07-28 for the Phase 5 Terra-judge comparability and SQLite WAL lifecycle gates — see PROGRESS.md decision log)
 
 ### A. Architecture
 1. **Gateway API surface: Chat Completions-compatible subset of `/v1/chat/completions`** (the fields the dogfood apps use, not universal OpenAI compatibility). Makes dogfooding a base-URL change (see #16).
@@ -32,7 +32,7 @@ A self-hosted **model gateway** (multi-provider routing — already a mastered p
 
 ### B. Stack
 4. **Language: TypeScript (Fastify).** Streaming proxies and provider SDKs are first-class in Node, and the built-in dashboard is cheapest there. Python/FastAPI is already proven twice (Distributed Job Queue, SIGNAL); Go's value is better banked by finishing Cross-Device Clipboard Sync.
-5. **Database: SQLite.** Matches the single-tenant scope guard; Postgres signal is already proven ~6 times across the portfolio; better-sqlite3 experience exists from AI_reading_assistant.
+5. **Database: SQLite in WAL mode, with an explicit container lifecycle.** Matches the single-tenant scope guard; Postgres signal is already proven ~6 times across the portfolio; better-sqlite3 experience exists from AI_reading_assistant. The human-approved Phase 5 durability amendment retains the existing Docker bind mount and requires production SIGTERM/SIGINT handling to await Fastify close, validate a successful TRUNCATE WAL checkpoint, and close the database even when checkpointing fails. Host `sqlite3` access is prohibited while the gateway is live; use the admin API or an in-container reader, and make host reads only after a verified graceful stop. Before another paid Phase 5 run, a real 50-result persistence regression, signal-shutdown test, and no-provider Docker write/stop/read/restart canary must all pass.
 6. **Cache: exact-match (hash of model+prompt+params) in DB.** Semantic cache is a documented stretch goal only.
 7. **Dashboard: built-in lightweight web UI served by the gateway.** It's a headline deliverable; a separate React app adds a repo, not a concept.
 

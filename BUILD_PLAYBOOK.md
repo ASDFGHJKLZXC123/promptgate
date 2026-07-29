@@ -59,7 +59,7 @@ The table above is the index; the playbook below is the actual begin-to-end buil
    ```
    Add `.env.example` with every key; `.env` gitignored.
 
-5. **DB + migration runner.** `packages/gateway/src/db/index.ts` opens better-sqlite3 with `db.pragma("journal_mode = WAL")` **and `db.pragma("foreign_keys = ON")`** (SQLite doesn't enforce FKs otherwise — §4). `src/db/migrate.ts`:
+5. **DB + migration runner.** `packages/gateway/src/db/index.ts` opens better-sqlite3 with `db.pragma("journal_mode = WAL")` **and `db.pragma("foreign_keys = ON")`** (SQLite doesn't enforce FKs otherwise — §4). Production SIGTERM/SIGINT must await Fastify close; its close hook validates a successful TRUNCATE WAL checkpoint and always closes the database. Host `sqlite3` must never open the bind-mounted database while the gateway is live. `src/db/migrate.ts`:
    ```ts
    export function migrate(db: Database) {
      db.exec(`CREATE TABLE IF NOT EXISTS _migrations (
@@ -179,7 +179,9 @@ verify_model GEMINI_API_KEY gemini-2.5-flash
 verify_model DEEPSEEK_API_KEY deepseek-v4-flash
 verify_model OPENAI_API_KEY gpt-5.6-luna
 echo "DEFERRED claude-sonnet-5: Anthropic adapter is Phase 2"
+docker compose stop gateway  # required before a host SQLite read
 sqlite3 data/promptgate.db "SELECT model, input_tokens, output_tokens, cost_micro_usd, status FROM requests ORDER BY id DESC LIMIT 3;"
+docker compose up -d gateway
 ```
 Every executed call must return a correct response. Its row must be `status='ok'`, contain non-null tokens/cost, and its persisted micro-USD cost (÷1e6 for USD) must match an independently recorded calculation from the provider's official published rates to the 4th decimal. **Human-approved Phase 1 evidence amendment (2026-07-25):** this published-rate reconciliation plus the persisted row is the required Phase 1 cost evidence in place of a provider account-dashboard artifact.
 
@@ -205,7 +207,9 @@ Every executed call must return a correct response. Its row must be `status='ok'
 
 **Verify phase 2:** run the same SDK snippet with `stream: true` for every implemented provider whose key is configured (`claude-*`, `gpt-*`, `gemini-*`, `deepseek-*`) — chunks print incrementally. Record unavailable-provider activation checks as deferred with the missing key named; do not mark them live-green. Then:
 ```bash
+docker compose stop gateway  # required before a host SQLite read
 sqlite3 data/promptgate.db "SELECT model, streamed, first_token_ms, total_ms, cost_micro_usd FROM requests ORDER BY id DESC LIMIT 4;"
+docker compose up -d gateway
 ```
 Every executed provider row: `streamed=1`, non-null tokens/cost, `first_token_ms < total_ms`. Checkpoint A audits code parity across all four plus the explicit live/deferred matrix.
 
@@ -254,7 +258,9 @@ Fixture activation is part of this Verify window and is the only Phase 2 point a
 ```bash
 # cache: identical request twice
 curl -s ... -D - | grep x-pg-cache     # miss, then hit; second row cost_micro_usd = 0
+docker compose stop gateway  # required before a host SQLite read
 sqlite3 data/promptgate.db "SELECT cache_hit, cost_micro_usd FROM requests ORDER BY id DESC LIMIT 2;"
+docker compose up -d gateway
 # budget: floor it via the admin API (memo invalidated server-side), expect immediate refusal
 curl -s -X PATCH localhost:8787/admin/api/keys/1 -H "x-admin-token: $ADMIN_TOKEN" \
   -H 'content-type: application/json' -d '{"budget_micro_usd_month": 1}'
@@ -299,12 +305,16 @@ curl -s -X PUT localhost:8787/admin/api/prompts/greet/labels/prod -H "$AT" -H "$
 # client call with pg_prompt greet@prod + pg_vars {"style":"tersely"} → French reply
 curl -s -X PUT localhost:8787/admin/api/prompts/greet/labels/prod -H "$AT" -H "$H" -d '{"version":1}'
 # same client call, zero client changes → English reply. That's the rollback story.
+docker compose stop gateway  # required before a host SQLite read
 sqlite3 data/promptgate.db "SELECT prompt_id, prompt_version FROM requests ORDER BY id DESC LIMIT 2;"
+docker compose up -d gateway
 ```
 
 ### Phase 5 — Eval harness (`pg-eval`)
 
 Human-approved gate amendment (2026-07-28): Phase 5 runs exactly `deepseek-v4-flash` as its target, with `gpt-5.6-terra` only as its independent high-effort judge. Terra judges DeepSeek output, and neither model judges itself. DeepSeek target calls retain temperature zero; Terra judge calls omit the temperature field while retaining high reasoning effort and JSON-object output. This supersedes the earlier Gemini-judge persisted-baseline live path: baseline run ID 1 was Gemini-judged, while persisted eval rows do not identify their judge, so both live Verify commands must freshly pair baseline and candidate under Terra and must omit `--baseline-from-history`. Hardened history support remains available outside this active gate. General four-provider gateway support and Phase 6's later paired requirement are unchanged.
+
+Human-approved SQLite lifecycle amendment (2026-07-28): retain WAL and the existing bind mount; make SIGTERM/SIGINT share an awaited, once-guarded Fastify shutdown; require the close hook to validate a successful TRUNCATE checkpoint and close the database in `finally`; set Compose stop grace beyond the upstream timeout; and prohibit host `sqlite3` while the gateway is live. The required pre-paid gates are a real 50-result persistence/reopen regression, a signal-shutdown/main-file regression, and a no-provider Docker bind-mount write → graceful stop → host read → restart/API read canary. The 50-result gate also exposed order-sensitive floating-point addition: request and DAO validation share a scored-count-scaled machine-epsilon comparison for `score_avg`, while nullability, counts, pass totals, and micro-USD totals remain exact. This changes no dataset, judge/target, caching, retry, budget, exit-code, or Phase 6 contract.
 
 1. **Package scaffold.** `packages/evals`: deps `yaml zod`, bin entry `pg-eval` → `src/cli.ts` (hand-rolled arg parsing or `node:util` parseArgs — no commander needed for 3 commands: `run`, `seed-ci`, `comment`). The root workspace link exposes `./node_modules/.bin/pg-eval`; invoke that path directly so infrastructure exit `2` is not collapsed to `1` by pnpm's filtered `exec` wrapper.
 
@@ -329,6 +339,13 @@ Human-approved gate amendment (2026-07-28): Phase 5 runs exactly `deepseek-v4-fl
 7. **Golden dataset.** Execute amended §7.3: preserve the recoverable carematch probes, derive additional seeds from the immutable safety policy without calling them verbatim originals, expand with Claude Fable 5 / high, and hand-review every final label. Commit `safety_screening.yaml`, `asserts/*.js`, and `docs/evidence/phase-5-seed-provenance.md` together.
 
 **Verify phase 5:**
+
+Before either paid command, run the complete offline suite and the no-provider
+Docker durability canary against the exact committed image. Stop immediately
+if a 50-result write, signal exit/checkpoint, host-after-stop main-file read,
+restart/API read, lint, test, or build check is red. Never use host `sqlite3`
+while the gateway is live.
+
 ```bash
 ./node_modules/.bin/pg-eval run --dataset safety_screening \
   --prompt safety_screen@candidate --baseline prod \
