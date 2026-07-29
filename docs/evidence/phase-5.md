@@ -547,6 +547,55 @@ signal guard, checkpoint result/error precedence, 150-second stop grace,
 bound, strict types, secrets, authority synchronization, and unchanged Phase 6
 scope, then returned `APPROVE`.
 
+### Exact-image no-provider Docker durability canary
+
+The lifecycle amendment was committed as
+`770ea7a7b01fa0c79cbd4eb86250dde39d81b3c3`. Its exact Docker build produced
+manifest list
+`sha256:cce2449fceb967b0ec5d2440e0bbbc2b7459588261b50ffc0f4703342fce8a11`.
+The image ran against an isolated temporary bind mount and loopback port with
+only a canary-local admin value. No provider credential was passed.
+
+Initial health and the admin-only production-sized write returned:
+
+```console
+health={"ok":true}
+{"dataset_id":1,"run_id":1,"returned_results":50,"detail_results":50,"score_avg":0.9114285714285716,"provider_calls":0}
+```
+
+The first Docker SIGTERM stop completed with:
+
+```console
+status=exited
+exit_code=0
+oom_killed=false
+```
+
+Only after that verified exit, the host inspected the bind mount. The directory
+contained only the 135,168-byte `promptgate.db`; both
+`promptgate.db-wal` and `promptgate.db-shm` were absent. A read-only query
+against a copy of that main file, without either sidecar, returned:
+
+```console
+datasets|runs|results|provider_requests|cases_total|score_avg
+1|1|50|0|50|0.911428571428572
+```
+
+The same stopped container then restarted from the same bind mount:
+
+```console
+health={"ok":true}
+{"status":200,"run_id":1,"cases_total":50,"results":50,"model":"deepseek-v4-flash","score_avg":0.9114285714285716}
+```
+
+Its final graceful stop also returned `exited|0|false`. The temporary container,
+database, and main-file copy were removed after evidence capture. The image
+contains no `.env` because `.dockerignore` excludes `.env` and `.env.*`.
+
+Every approved pre-paid durability gate is now green. The remaining paid good
+Verify is not authorized to start with the currently configured values:
+the Compose-render exposure recorded below requires credential rotation first.
+
 The post-evidence gate remained green:
 
 ```console
