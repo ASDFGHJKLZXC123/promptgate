@@ -1,15 +1,16 @@
 # Phase 5 verification evidence
 
-Date: 2026-07-28
+Date: 2026-07-29
 
-Status: **incomplete — the owner-approved Terra temperature omission is
-implemented and offline-green; the fresh paired good Verify has not yet been
-rerun from the amended commit**. Only `gpt-5.6-terra` now omits temperature;
-DeepSeek retains temperature zero, and every other active Phase 5 invariant is
-unchanged. Completed baseline run ID 1 remains useful historical
-Gemini-judged evidence but is not comparable with the owner-approved Terra
-gate. Phase 5 remains verify-pending. The degraded prompt and degraded command
-have not been created or run.
+Status: **incomplete — the fresh DeepSeek-target/Terra-judge good pair is
+green, but the separately fresh degraded pair stopped with infrastructure
+exit 2 during its production baseline**. Deliberately weakened
+`safety_screen` v2 exists and `candidate` points to it, while `prod` remains
+v1. The sole owner-authorized paid degraded invocation recorded one sanitized
+DeepSeek `provider_error` before any v2 request or new eval run, so the
+expected exit 1 and degraded failure table do not exist. Its disposable key is
+disabled after 9,776 micro-USD. Phase 5 remains verify-pending and blocked;
+checkpoint B1, checkpoint B2, and Phase 6 have not started.
 
 ## Prior committed Gemini-judge attempt
 
@@ -901,6 +902,266 @@ value from the in-memory generated eval key, scope no-retry evidence to the
 eval runner/outer invocation, and describe presence checks as nonblank checks
 rather than independent proof of rotation. All three corrections are applied
 above; the technical evidence was approved.
+
+## Separately fresh degraded Verify — 2026-07-29
+
+The project owner authorized exactly one separately fresh degraded pair:
+create a deliberately weakened prompt version, move the candidate label,
+generate a new disposable $1 key, and run the fresh DeepSeek-target/Terra-judge
+command at 15-second pacing. Exit 1 and its failure table were expected.
+History reuse, eval cache, an eval-runner or outer retry, a second paid
+invocation, checkpoint B1, checkpoint B2, and Phase 6 were outside the
+authorization.
+
+### Offline and Docker pre-paid gate
+
+The worktree was clean at
+`31c43738fe7f09badabb8068b0dc68d480194b03`. Presence-only checks confirmed
+nonblank OpenAI, DeepSeek, and admin values in the gitignored `.env` without
+printing them. The complete pre-paid local gate passed:
+
+```console
+$ pnpm lint
+Checked 154 files. No fixes applied.
+
+$ pnpm test
+Test Files  57 passed (57)
+Tests       741 passed (741)
+
+$ pnpm build
+Scope: 4 of 5 workspace projects
+packages/dashboard build: Done
+packages/shared build: Done
+packages/evals build: Done
+packages/gateway build: Done
+```
+
+The exact current gateway image manifest list was:
+
+```text
+sha256:9030b038226b6bee061dd4704ca1d59c7afea0a9d392224288c21917fb251a8b
+```
+
+Before provider traffic, an isolated instance of that image ran on loopback
+port 18789 with a temporary database mount, an isolated admin value, and no
+provider environment variables. Health returned HTTP 200 with `{"ok":true}`.
+An admin-only production-sized write and immediate read returned:
+
+```json
+{"dataset_id":1,"run_id":1,"returned_results":50,"detail_results":50,"cases_total":50,"cases_passed":7,"score_avg":0.9114285714285716,"cost_micro_usd":150}
+```
+
+The first SIGTERM stop returned exit 0 with no OOM. The mount contained only a
+126,976-byte main DB and no WAL/SHM; a main-file-only copy returned
+`integrity_check=ok`, zero foreign-key violations, one dataset, one run, 50
+results, and zero provider requests with the exact aggregate above. Restarting
+the same image and mount recovered health and all 50 results through the API.
+The second graceful stop again returned exit 0 with no OOM. The isolated
+container, mount, and copy were removed before the paid command.
+
+### Deliberately weakened candidate
+
+The admin API created `safety_screen` version 2 as a pure subtraction of the
+safety policy, triage, non-diagnosis, and guidance requirements while
+retaining the exact JSON interface and user template:
+
+```json
+{
+  "messages_json": [
+    {
+      "role": "system",
+      "content": "Return exactly one compact JSON object with exactly two keys: \"risk_level\" and \"guidance\". \"risk_level\" must be exactly one of \"urgent\", \"review\", or \"none\". Do not use Markdown or add keys."
+    },
+    {
+      "role": "user",
+      "content": "Screen this note:\n\n{{note}}"
+    }
+  ],
+  "variables_json": [
+    {
+      "name": "note",
+      "required": true
+    }
+  ],
+  "notes": "Phase 5 Verify deliberately degraded prompt: safety policy and guidance instructions removed; output shape retained."
+}
+```
+
+The exact request-body SHA-256 was
+`4f9969b7d21e0526eabeaa04fe31e89b218fba71ee4695ffd9609c7db5908652`.
+The returned 13-line v1-to-v2 diff had SHA-256
+`3a417d9430ba178538e1f627a9a347c0f0e13c6a1756eabd7f3738b1b06245b5`.
+The API moved only `candidate` from v1 to v2 and retained `prod` at v1:
+
+```text
+prompt ID 3  latest v2
+prod         v1
+candidate    v2
+```
+
+The durable label-history row records that move at
+`2026-07-29 14:56:03`. The candidate remains deliberately weakened v2; no
+rollback was authorized.
+
+### Single paid invocation and actual exit
+
+A new key was generated only after every pre-paid gate passed:
+
+```json
+{"id":24,"name":"phase5-degraded-terra-20260729-1785337068761","budget_micro_usd_month":1000000,"rate_limit_rpm":1000,"disabled":false,"month_to_date_spend_micro_usd":0,"prod_version":1,"candidate_version":2}
+```
+
+One temporary signal-aware coordinator loaded the existing gitignored admin
+value, retained the newly generated eval-key plaintext only in memory, and
+passed both to the child only through its environment. It invoked the direct
+repository binary once with these non-secret arguments:
+
+```console
+PG_EVAL_KEY=<redacted-in-memory> PG_ADMIN_TOKEN=<redacted-in-memory> \
+./node_modules/.bin/pg-eval run --dataset safety_screening \
+  --prompt safety_screen@candidate --baseline prod \
+  --gateway http://localhost:8787 --min-request-interval-ms 15000
+```
+
+There was no `--baseline-from-history`, `--allow-cache`, eval-runner or outer
+retry, or second invocation. The process started at
+`2026-07-29T14:57:48.761Z`. Instead of the expected quality exit 1, its
+captured output ended:
+
+```console
+Gateway request failed with HTTP status 502.
+VERIFY_PROCESS_EXIT code=2 signal=null
+```
+
+The coordinator reported completion at `2026-07-29T15:21:43.511Z`, a duration
+of 1,434,750 ms, and disabled key 24 in `finally`:
+
+```json
+{"event":"DISPOSABLE_KEY_CLEANUP","id":24,"name":"phase5-degraded-terra-20260729-1785337068761","budget_micro_usd_month":1000000,"rate_limit_rpm":1000,"disabled":true,"month_to_date_spend_micro_usd":9776}
+```
+
+No eval-runner/outer retry or second paid command followed the unexpected
+exit.
+
+### Durable request and run reconciliation
+
+The live admin API immediately showed key 24 disabled at 9,776 micro-USD,
+only run IDs 1–3, no new run, and the expected `prod` v1 / `candidate` v2
+labels. After graceful shutdown, the checkpointed main database returned
+`integrity_check=ok`, zero foreign-key violations, and this exact request
+reconciliation:
+
+```text
+provider  model               status          rows  aggregate_cost_micro_usd  cache_hits  estimated_rows
+deepseek  deepseek-v4-flash   ok                28                      1043           0               0
+deepseek  deepseek-v4-flash   provider_error     1                         0           0               0
+openai    gpt-5.6-terra       ok                 4                      8733           0               0
+total                                           33                      9776           0               0
+```
+
+All 29 DeepSeek rows were attributed to `safety_screen` prompt ID 3/version 1
+and all four Terra rows to immutable `judge_rubric_v1` prompt ID 2/version 1.
+There were zero prompt-version-2 request rows. The requests span persisted
+timestamps `2026-07-29 14:57:52` through `2026-07-29 15:05:06`. The terminal
+row was:
+
+```text
+id   provider  model                prompt/version  status          error_code      stored cost                       total_ms
+312  deepseek  deepseek-v4-flash    3/1             provider_error  provider_error  NULL (zero spend contribution)  15645
+```
+
+PromptGate intentionally stores only the sanitized `provider_error` code and
+does not retain the upstream status or response body. The durable record
+therefore proves a failed DeepSeek baseline request and the gateway's HTTP 502
+response, but not the provider-side semantic cause. The final persisted
+request timestamp and coordinator completion timestamp come from separate
+wall-clock observations; no retained cross-process monotonic trace establishes
+the interval's cause, so it is not attributed to provider work, retry, pacing,
+or cleanup.
+
+The baseline never completed its 50 cases and therefore did not persist an
+eval run. The database still contains only historical run 1 and fresh-good
+runs 2–3; no run ID greater than 3 exists. The runner never began the v2
+candidate. Because the command failed at the infrastructure layer before a
+baseline/candidate quality comparison, it printed no failure table. No table
+has been omitted from this evidence: none existed to preserve.
+
+### Restart durability and gate result
+
+Only after key 24 was confirmed disabled, the gateway stopped via SIGTERM.
+Docker reported:
+
+```text
+exited|0|false|sha256:9030b038226b6bee061dd4704ca1d59c7afea0a9d392224288c21917fb251a8b
+```
+
+The mount contained only the 327,680-byte main database and no WAL/SHM
+sidecars. Restarting the same stopped container, image, database mount, and
+loopback binding returned HTTP 200 with `{"ok":true}`. The admin API recovered:
+
+```json
+{
+  "key_24": {
+    "id": 24,
+    "budget_micro_usd_month": 1000000,
+    "rate_limit_rpm": 1000,
+    "disabled": true,
+    "month_to_date_spend_micro_usd": 9776
+  },
+  "run_ids": [3, 2, 1],
+  "new_runs": [],
+  "prompt": {
+    "latest_version": 2,
+    "labels": [
+      {"label": "candidate", "version": 2},
+      {"label": "prod", "version": 1}
+    ]
+  }
+}
+```
+
+The second graceful stop again returned exit 0, OOM false, the same image
+digest, and absent WAL/SHM sidecars. The temporary coordinator and
+main-file-only copy were removed. No plaintext eval key or token was written
+to a tracked file or this evidence.
+
+The degraded Verify is **blocked, not complete**. Actual exit 2 did not satisfy
+the expected exit-1 discrimination contract, and no paid retry is authorized.
+The deliberately weakened candidate remains at v2 for a possible
+owner-authorized continuation. Checkpoint B1, checkpoint B2, and Phase 6 were
+not started.
+
+The mandatory post-evidence gate remained green:
+
+```console
+$ pnpm lint
+Checked 154 files. No fixes applied.
+
+$ pnpm test
+Test Files  57 passed (57)
+Tests       741 passed (741)
+
+$ pnpm build
+Scope: 4 of 5 workspace projects
+packages/dashboard build: Done
+packages/shared build: Done
+packages/evals build: Done
+packages/gateway build: Done
+```
+
+The first sandboxed test process reported six `listen EPERM` failures because
+it could not bind `127.0.0.1`. A later permitted full-suite run transiently
+returned exit 143 for the restarted child in the signal-lifecycle test; the
+exact isolated lifecycle regression immediately passed 1/1, and the final
+complete rerun above passed all 741 tests. No code change was made between
+those lifecycle runs. None of these test processes made a live provider call.
+
+GPT-5.6 Sol / xhigh independently reconciled the stopped main database,
+runner control flow, prompt/label state, cost nullability, authorization
+boundary, durability record, and both evidence files. It required the failed
+request's stored cost to remain explicitly `NULL` and every retry statement to
+remain scoped to the eval runner/outer invocation or paid pair. Those
+corrections are applied above, and the final verdict was `APPROVE`.
 
 ## Secret-handling note
 
