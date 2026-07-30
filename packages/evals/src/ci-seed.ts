@@ -26,6 +26,8 @@ const CERTIFIED_GOOD_DIGEST =
 	"f8da4cd3b3ba21b17c2525ea5f7dd5767bf9bfc026c66f0175649e351632c944";
 const CERTIFIED_DEGRADED_DIGEST =
 	"4f9969b7d21e0526eabeaa04fe31e89b218fba71ee4695ffd9609c7db5908652";
+const NEGATIVE_CONTROL_DIGEST =
+	"b4191e04e77a0a2e0978c08dda03b202de018e1d35fccf51a8411faad5875004";
 
 const PromptVersionSchema = z
 	.object({
@@ -57,11 +59,15 @@ const SafetyFixtureSchema = z
 	.object({
 		slug: z.literal("safety_screen"),
 		description: z.string().trim().min(1),
-		versions: z.tuple([PromptVersionSchema, PromptVersionSchema]),
+		versions: z.tuple([
+			PromptVersionSchema,
+			PromptVersionSchema,
+			PromptVersionSchema,
+		]),
 		labels: z
 			.object({
 				prod: z.literal(1),
-				candidate: z.union([z.literal(1), z.literal(2)]),
+				candidate: z.union([z.literal(1), z.literal(2), z.literal(3)]),
 			})
 			.strict(),
 	})
@@ -162,6 +168,11 @@ function safetyFixture() {
 			"The CI safety prompt fixture does not match the certified Phase 5 prompts.",
 		);
 	}
+	if (sha256(parsed.data.versions[2]) !== NEGATIVE_CONTROL_DIGEST) {
+		throw new CiSeedError(
+			"The CI safety prompt fixture does not match the pinned Phase 6 negative control.",
+		);
+	}
 	return parsed.data;
 }
 
@@ -170,6 +181,7 @@ export const SAFETY_SCREEN_FIXTURE = checkedFixture;
 export const SAFETY_SCREEN_VERSION_DIGESTS = [
 	sha256(checkedFixture.versions[0]),
 	sha256(checkedFixture.versions[1]),
+	sha256(checkedFixture.versions[2]),
 ] as const;
 const SAFETY_FIXTURE_MARKER = sha256({
 	versions: checkedFixture.versions,
@@ -490,7 +502,7 @@ async function ensureCiKey(
 async function addSafetyVersion(
 	fetcher: FetchLike,
 	config: AdminConfig,
-	version: 1 | 2,
+	version: 1 | 2 | 3,
 ): Promise<void> {
 	const created = await parsedAdminRequest(
 		fetcher,
@@ -532,6 +544,7 @@ async function ensureSafetyPrompt(
 		}
 		await addSafetyVersion(fetcher, config, 1);
 		await addSafetyVersion(fetcher, config, 2);
+		await addSafetyVersion(fetcher, config, 3);
 		status = "created";
 	} else if (created.status === 409) {
 		const existing = (await listPrompts(fetcher, config)).find(
@@ -540,7 +553,7 @@ async function ensureSafetyPrompt(
 		if (
 			!existing ||
 			existing.description !== SAFETY_SCREEN_DESCRIPTION ||
-			(existing.latest_version !== null && existing.latest_version > 2)
+			(existing.latest_version !== null && existing.latest_version > 3)
 		) {
 			throw new CiSeedError(
 				"The existing CI safety prompt is incompatible with the locked fixture.",
@@ -548,12 +561,12 @@ async function ensureSafetyPrompt(
 		}
 		for (
 			let version = (existing.latest_version ?? 0) + 1;
-			version <= 2;
+			version <= 3;
 			version += 1
 		) {
-			await addSafetyVersion(fetcher, config, version as 1 | 2);
+			await addSafetyVersion(fetcher, config, version as 1 | 2 | 3);
 		}
-		status = existing.latest_version === 2 ? "already_exists" : "repaired";
+		status = existing.latest_version === 3 ? "already_exists" : "repaired";
 	} else {
 		throw new CiSeedError(
 			`The CI safety prompt creation failed with HTTP status ${created.status}.`,
@@ -566,7 +579,7 @@ async function ensureSafetyPrompt(
 	if (
 		!summary ||
 		summary.description !== SAFETY_SCREEN_DESCRIPTION ||
-		summary.latest_version !== 2
+		summary.latest_version !== 3
 	) {
 		throw new CiSeedError("The seeded CI safety prompt was invalid.");
 	}

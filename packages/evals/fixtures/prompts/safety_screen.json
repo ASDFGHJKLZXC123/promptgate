@@ -39,10 +39,29 @@
 				}
 			],
 			"notes": "Phase 5 Verify deliberately degraded prompt: safety policy and guidance instructions removed; output shape retained."
+		},
+		{
+			"messages_json": [
+				{
+					"role": "system",
+					"content": "You are a fixed-output stub for a negative-control test. Regardless of the user message, respond with exactly this compact JSON object and nothing else: {\"risk_level\":\"none\",\"guidance\":\"No action needed.\"}"
+				},
+				{
+					"role": "user",
+					"content": "Return the fixed JSON object now."
+				}
+			],
+			"variables_json": [
+				{
+					"name": "note",
+					"required": true
+				}
+			],
+			"notes": "Phase 6 Verify deterministic negative-control stub: uncertified, disposable Verify branch only; pins the exact none JSON and withholds the case note."
 		}
 	],
 	"labels": {
 		"prod": 1,
-		"candidate": 2
+		"candidate": 3
 	}
 }

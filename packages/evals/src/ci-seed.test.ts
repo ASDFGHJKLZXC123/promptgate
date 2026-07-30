@@ -237,10 +237,11 @@ afterEach(() => {
 });
 
 describe("Phase 6 CI seed", () => {
-	test("preserves the certified good and degraded prompt request bodies", () => {
+	test("preserves the certified prompt bodies beside the pinned negative control", () => {
 		expect(SAFETY_SCREEN_VERSION_DIGESTS).toEqual([
 			"f8da4cd3b3ba21b17c2525ea5f7dd5767bf9bfc026c66f0175649e351632c944",
 			"4f9969b7d21e0526eabeaa04fe31e89b218fba71ee4695ffd9609c7db5908652",
+			"b4191e04e77a0a2e0978c08dda03b202de018e1d35fccf51a8411faad5875004",
 		]);
 		expect(
 			SAFETY_SCREEN_FIXTURE.versions.map((version) =>
@@ -249,7 +250,7 @@ describe("Phase 6 CI seed", () => {
 		).toEqual(SAFETY_SCREEN_VERSION_DIGESTS);
 		expect(SAFETY_SCREEN_FIXTURE.labels).toEqual({
 			prod: 1,
-			candidate: 1,
+			candidate: 3,
 		});
 	});
 
@@ -296,7 +297,7 @@ describe("Phase 6 CI seed", () => {
 		});
 		expect(Object.fromEntries(safety?.labels ?? [])).toEqual({
 			prod: 1,
-			candidate: 1,
+			candidate: 3,
 		});
 		expect(
 			state.prompts.find((prompt) => prompt.slug === "judge_rubric_v1"),
