@@ -3,6 +3,7 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { request as httpRequest } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { Readable } from "node:stream";
 import type { ChatRequest, ChatResponse } from "@promptgate/shared";
 import type Database from "better-sqlite3";
 import type { FastifyInstance } from "fastify";
@@ -912,8 +913,9 @@ describe("POST /v1/chat/completions — streaming success", () => {
 			max_tokens: 1,
 			stream: true,
 		};
-		// This exceeds the response high-water mark, so the client can reset while
-		// the synthetic replay is still writing instead of after a clean finish.
+		// The test-local onSend gate below releases exactly one transport buffer,
+		// so the reset precedes the remaining cached frames without relying on OS
+		// socket-buffer timing.
 		seedStreamingCacheEntry(db, request, {
 			id: "cache-reset",
 			object: "chat.completion",
@@ -922,18 +924,67 @@ describe("POST /v1/chat/completions — streaming success", () => {
 			choices: [
 				{
 					index: 0,
-					message: { role: "assistant", content: "x".repeat(2 * 1024 * 1024) },
+					message: { role: "assistant", content: "x" },
 					finish_reason: "stop",
 				},
 			],
 			usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
 		});
 		const server = await buildTestServer({});
+		type ReplayGate = {
+			closed: Promise<void>;
+			release: () => void;
+		};
+		const queuedReplayGates: ReplayGate[] = [];
+		const allReplayGates: ReplayGate[] = [];
+		server.addHook("onSend", async (request, reply, payload) => {
+			if (request.headers["x-test-gate-cache-replay"] !== "1") {
+				return payload;
+			}
+			if (!(payload instanceof Readable)) {
+				throw new Error("expected a streaming cache replay");
+			}
+
+			let releaseReplay: (() => void) | undefined;
+			const released = new Promise<void>((resolve) => {
+				releaseReplay = resolve;
+			});
+			let didRelease = false;
+			const gate: ReplayGate = {
+				closed: new Promise((resolve) => {
+					reply.raw.once("close", resolve);
+				}),
+				release: () => {
+					if (!didRelease) {
+						didRelease = true;
+						releaseReplay?.();
+					}
+				},
+			};
+			queuedReplayGates.push(gate);
+			allReplayGates.push(gate);
+
+			return Readable.from(
+				(async function* gateReplay() {
+					let firstChunk = true;
+					for await (const chunk of payload) {
+						yield chunk;
+						if (firstChunk) {
+							firstChunk = false;
+							await released;
+						}
+					}
+				})(),
+			);
+		});
 		const address = await server.listen({ port: 0, host: "127.0.0.1" });
 		const body = JSON.stringify(request);
 
-		const resetReplay = async (): Promise<string> =>
-			await new Promise<string>((resolve, reject) => {
+		const resetReplay = async (): Promise<{
+			requestId: string;
+			release: () => void;
+		}> => {
+			return await new Promise((resolve, reject) => {
 				const client = httpRequest(
 					`${address}/v1/chat/completions`,
 					{
@@ -941,6 +992,7 @@ describe("POST /v1/chat/completions — streaming success", () => {
 						headers: {
 							...authHeaders(),
 							"content-length": Buffer.byteLength(body),
+							"x-test-gate-cache-replay": "1",
 						},
 					},
 					(response) => {
@@ -950,8 +1002,16 @@ describe("POST /v1/chat/completions — streaming success", () => {
 							return;
 						}
 						response.once("data", () => {
+							const gate = queuedReplayGates.shift();
+							if (!gate) {
+								reject(new Error("cache replay gate was not installed"));
+								return;
+							}
 							client.destroy();
-							resolve(requestId);
+							void gate.closed.then(
+								() => resolve({ requestId, release: gate.release }),
+								reject,
+							);
 						});
 					},
 				);
@@ -962,9 +1022,12 @@ describe("POST /v1/chat/completions — streaming success", () => {
 				});
 				client.end(body);
 			});
+		};
 
 		try {
-			const firstRequestId = await resetReplay();
+			const { requestId: firstRequestId, release: releaseFirstReplay } =
+				await resetReplay();
+			releaseFirstReplay();
 			const first = await readRow(db, firstRequestId);
 			expect(first).toMatchObject({
 				cache_hit: 1,
@@ -996,8 +1059,8 @@ describe("POST /v1/chat/completions — streaming success", () => {
 			db.exec(
 				"CREATE TRIGGER fail_cache_replay_log BEFORE INSERT ON requests BEGIN SELECT RAISE(ABORT, 'cache replay log failure'); END",
 			);
-			await resetReplay();
-			await new Promise((resolve) => setTimeout(resolve, 20));
+			const { release: releaseSecondReplay } = await resetReplay();
+			releaseSecondReplay();
 			// The failed fallback insert writes no third row, but it turns the active
 			// reservation into debt and keeps the budget fail-closed.
 			expect(
@@ -1016,6 +1079,9 @@ describe("POST /v1/chat/completions — streaming success", () => {
 				).statusCode,
 			).toBe(429);
 		} finally {
+			for (const gate of allReplayGates) {
+				gate.release();
+			}
 			await server.close();
 			db.close();
 		}
