@@ -435,6 +435,8 @@ Supported assertion types (v1): `equals`, `contains`, `icontains`, `regex`, `is-
 
 The human-approved Phase 6 interpretation is **four capped credentials, one live quality topology**: CI must receive dedicated provider-side-spend-limited credentials for OpenAI, Anthropic, Gemini, and DeepSeek, while the paired evaluation remains the canonical `deepseek-v4-flash` target judged by `gpt-5.6-terra`. Anthropic and Gemini receive no eval traffic in this gate, so their configured presence must not be reported as live adapter verification.
 
+The human-approved 2026-07-29 **Recovery A** contract narrows seeder replay to one intact fresh-gateway/handoff pair. Before the one-time `POST /admin/api/keys`, `seed-ci` must reserve an empty mode-`0600` `PG_EVAL_KEY_FILE`. A first seed accepts exactly zero API keys; a reuse accepts exactly one enabled `ci-evals` key with the locked $1 budget/rate and requires the saved plaintext to authenticate. Any other key count or identity fails before prompt/dataset mutation. If the POST result or the subsequent durable file handoff is interrupted or ambiguous, the run fails closed and CI must discard and recreate the ephemeral gateway, SQLite database, and handoff before retrying. Prompt/version/label/dataset repair remains idempotent within an intact pair. This recovery path adds no rotation endpoint, DAO, migration, or schema change.
+
 ```yaml
 # .github/workflows/eval-gate.yml (sketch — pin all actions to full commit SHAs in the real file)
 name: eval-gate

@@ -109,6 +109,77 @@ describe("pg-eval CLI scaffold", () => {
 		);
 	});
 
+	test("runs seed-ci through its dedicated runtime without printing credentials", async () => {
+		const { io, stderr, stdout } = createIo();
+		const seedCi = vi.fn().mockResolvedValue({
+			key: "created",
+			safetyPrompt: "created",
+			judgePrompt: "created",
+			datasetId: 7,
+		});
+		const loadRunModules = vi.fn();
+		const adminToken = "admin-token-that-must-stay-private";
+		const runtime = {
+			loadRunModules,
+			loadSeedModules: async () => ({
+				resolveAdminConfig: () => ({
+					baseUrl: new URL("https://gateway.example"),
+					adminToken,
+				}),
+				seedCi,
+			}),
+		} satisfies CliRuntime;
+
+		await expect(
+			runCli(
+				[
+					"seed-ci",
+					"--gateway",
+					"https://gateway.example",
+					"--admin-token",
+					adminToken,
+				],
+				io,
+				{ PG_EVAL_KEY_FILE: "/secure/ci-eval.key" },
+				runtime,
+			),
+		).resolves.toBe(0);
+		expect(loadRunModules).not.toHaveBeenCalled();
+		expect(seedCi).toHaveBeenCalledWith({
+			admin: {
+				baseUrl: new URL("https://gateway.example"),
+				adminToken,
+			},
+			keyFile: "/secure/ci-eval.key",
+		});
+		expect(stdout).toHaveBeenCalledWith(
+			"CI seed ready: key created; safety prompt created; judge prompt created; dataset 7.",
+		);
+		expect(JSON.stringify(stdout.mock.calls)).not.toContain(adminToken);
+		expect(stderr).not.toHaveBeenCalled();
+	});
+
+	test("requires a secure key handoff file before invoking the CI seeder", async () => {
+		const { io, stderr } = createIo();
+		const seedCi = vi.fn();
+		const runtime = {
+			loadRunModules: vi.fn(),
+			loadSeedModules: async () => ({
+				resolveAdminConfig: () => ({
+					baseUrl: new URL("https://gateway.example"),
+					adminToken: "admin-token-123456",
+				}),
+				seedCi,
+			}),
+		} satisfies CliRuntime;
+
+		await expect(runCli(["seed-ci"], io, {}, runtime)).resolves.toBe(2);
+		expect(stderr).toHaveBeenCalledWith(
+			"PG_EVAL_KEY_FILE is required for pg-eval seed-ci.",
+		);
+		expect(seedCi).not.toHaveBeenCalled();
+	});
+
 	test("ignores ambient request-pacing values unless the CLI flag is supplied", async () => {
 		const { io } = createIo();
 		const runEvaluation = vi.fn().mockResolvedValue({
@@ -254,6 +325,22 @@ describe("pg-eval CLI scaffold", () => {
 		expect(result.stderr).not.toContain("ERR_MODULE_NOT_FOUND");
 	}, 15_000);
 
+	test("source executable loads the CI seeder before missing-config failure", () => {
+		const result = spawnSync(sourceBin, ["seed-ci"], {
+			cwd: process.cwd(),
+			encoding: "utf8",
+			env: {
+				...process.env,
+				PG_ADMIN_TOKEN: "",
+				PG_EVAL_KEY_FILE: "",
+				PG_GATEWAY_URL: "",
+			},
+		});
+		expect(result.status).toBe(2);
+		expect(result.stderr).toContain("Gateway URL");
+		expect(result.stderr).not.toContain("ERR_MODULE_NOT_FOUND");
+	}, 15_000);
+
 	test("built CLI loads its compiled runtime modules", () => {
 		const result = spawnSync(
 			process.execPath,
@@ -266,6 +353,26 @@ describe("pg-eval CLI scaffold", () => {
 				"safety@1",
 			],
 			{ cwd: process.cwd(), encoding: "utf8" },
+		);
+		expect(result.status).toBe(2);
+		expect(result.stderr).toContain("Gateway URL");
+		expect(result.stderr).not.toContain("ERR_MODULE_NOT_FOUND");
+	});
+
+	test("built CLI loads its compiled CI seeder", () => {
+		const result = spawnSync(
+			process.execPath,
+			[resolve(process.cwd(), "packages/evals/dist/cli.js"), "seed-ci"],
+			{
+				cwd: process.cwd(),
+				encoding: "utf8",
+				env: {
+					...process.env,
+					PG_ADMIN_TOKEN: "",
+					PG_EVAL_KEY_FILE: "",
+					PG_GATEWAY_URL: "",
+				},
+			},
 		);
 		expect(result.status).toBe(2);
 		expect(result.stderr).toContain("Gateway URL");

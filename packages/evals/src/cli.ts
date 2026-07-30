@@ -40,9 +40,23 @@ export interface RunCliModules {
 	}>;
 }
 
+export interface SeedCliModules {
+	resolveAdminConfig(input: {
+		flags: { gateway?: string; adminToken?: string };
+		env: Readonly<Record<string, string | undefined>>;
+	}): AdminConfig;
+	seedCi(input: { admin: AdminConfig; keyFile: string }): Promise<{
+		key: "created" | "reused";
+		safetyPrompt: "created" | "repaired" | "already_exists";
+		judgePrompt: "created" | "repaired" | "already_exists";
+		datasetId: number;
+	}>;
+}
+
 /** Dependency seam for offline CLI integration tests. */
 export interface CliRuntime {
 	loadRunModules(): Promise<RunCliModules>;
+	loadSeedModules?(): Promise<SeedCliModules>;
 }
 
 const defaultIo: CliIo = {
@@ -99,7 +113,10 @@ Run options:
   --allow-cache                 Allow cache during local development
   --max-score-drop <number>     Maximum acceptable baseline score drop
   --min-request-interval-ms <n> Opt-in minimum gap per model request
-  -h, --help                    Show this help`;
+  -h, --help                    Show this help
+
+Seed CI environment:
+  PG_EVAL_KEY_FILE <path>       Mode-0600 handoff file for the one-time CI key`;
 
 function isCommand(value: string): value is EvalCommand {
 	return (COMMANDS as readonly string[]).includes(value);
@@ -191,12 +208,12 @@ export function parseCli(argv: readonly string[]): ParsedCli | { help: true } {
 	return values.help === true ? { help: true } : parsed;
 }
 
-/** Executes only the implemented run command; seed-ci/comment stay Phase 6 work. */
+/** Executes the run and CI seed commands; comment remains an optional later step. */
 export async function runCli(
 	argv: readonly string[],
 	io: CliIo = defaultIo,
 	env: Readonly<Record<string, string | undefined>> = process.env,
-	runtime: CliRuntime = { loadRunModules },
+	runtime: CliRuntime = { loadRunModules, loadSeedModules },
 ): Promise<number> {
 	try {
 		const parsed = parseCli(argv);
@@ -204,11 +221,36 @@ export async function runCli(
 			io.stdout(usage);
 			return 0;
 		}
-		if (parsed.command !== "run") {
+		if (parsed.command === "comment") {
 			io.stderr(
-				`pg-eval ${parsed.command} is scaffolded but not implemented yet.`,
+				"pg-eval comment is optional and is not implemented; use the CI job summary.",
 			);
 			return 2;
+		}
+		if (parsed.command === "seed-ci") {
+			const modules = await (runtime.loadSeedModules?.() ?? loadSeedModules());
+			const admin = modules.resolveAdminConfig({
+				flags: {
+					gateway:
+						typeof parsed.options.gateway === "string"
+							? parsed.options.gateway
+							: undefined,
+					adminToken:
+						typeof parsed.options["admin-token"] === "string"
+							? parsed.options["admin-token"]
+							: undefined,
+				},
+				env,
+			});
+			const keyFile = env.PG_EVAL_KEY_FILE;
+			if (keyFile === undefined || keyFile.trim() === "") {
+				throw new Error("PG_EVAL_KEY_FILE is required for pg-eval seed-ci.");
+			}
+			const result = await modules.seedCi({ admin, keyFile });
+			io.stdout(
+				`CI seed ready: key ${result.key}; safety prompt ${result.safetyPrompt}; judge prompt ${result.judgePrompt}; dataset ${result.datasetId}.`,
+			);
+			return 0;
 		}
 		const dataset = parsed.options.dataset;
 		const prompt = parsed.options.prompt;
@@ -317,6 +359,22 @@ async function loadRunModules(): Promise<RunCliModules> {
 		GatewayClient: gateway.GatewayClient,
 		AdminClient: admin.AdminClient,
 		runEvaluation: runner.runEvaluation,
+	};
+}
+
+async function loadSeedModules(): Promise<SeedCliModules> {
+	const source =
+		import.meta.url.endsWith(".ts") &&
+		existsSync(new URL("./ci-seed.ts", import.meta.url));
+	const [seed, admin] = source
+		? await Promise.all([
+				import(new URL("./ci-seed.ts", import.meta.url).href),
+				import(new URL("./admin-client.ts", import.meta.url).href),
+			])
+		: await Promise.all([import("./ci-seed.js"), import("./admin-client.js")]);
+	return {
+		resolveAdminConfig: admin.resolveAdminConfig,
+		seedCi: seed.seedCi,
 	};
 }
 
