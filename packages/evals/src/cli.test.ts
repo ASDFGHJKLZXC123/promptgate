@@ -34,6 +34,8 @@ describe("pg-eval CLI scaffold", () => {
 				"--admin-token",
 				"admin-test",
 				"--allow-cache",
+				"--max-pass-rate-drop",
+				"0.05",
 				"--max-score-drop",
 				"0.05",
 				"--min-request-interval-ms",
@@ -48,6 +50,7 @@ describe("pg-eval CLI scaffold", () => {
 				dataset: "safety_screening",
 				gateway: "http://localhost:8787",
 				key: "pg-test",
+				"max-pass-rate-drop": "0.05",
 				"max-score-drop": "0.05",
 				"min-request-interval-ms": "15000",
 				prompt: "safety_screen@candidate",
@@ -275,6 +278,31 @@ describe("pg-eval CLI scaffold", () => {
 			}),
 			expect.any(Object),
 		);
+	});
+
+	test("rejects a non-finite pass-rate drop before runtime resolution", async () => {
+		const { io, stderr } = createIo();
+		const loadRunModules = vi.fn();
+		await expect(
+			runCli(
+				[
+					"run",
+					"--dataset",
+					"safety_screening",
+					"--prompt",
+					"safety_screen@candidate",
+					"--max-pass-rate-drop",
+					"Infinity",
+				],
+				io,
+				{},
+				{ loadRunModules },
+			),
+		).resolves.toBe(2);
+		expect(stderr).toHaveBeenCalledWith(
+			"--max-pass-rate-drop must be a finite number.",
+		);
+		expect(loadRunModules).not.toHaveBeenCalled();
 	});
 
 	test.each(["", " ", "+1", "-1", "1.5", "1e3", "01", "9007199254740992"])(

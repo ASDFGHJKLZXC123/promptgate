@@ -209,6 +209,7 @@ describe("Phase 5 eval-of-evals regression", () => {
 				"|---|---|---|---|---|",
 				"| safe-case | deepseek-v4-flash | pass | 0.75 |  |",
 				"| risk-case | deepseek-v4-flash | fail | 0.25 | rubric failed |",
+				"deepseek-v4-flash: baseline pass rate 1; candidate pass rate 0.5; pass-rate drop 0.5; maximum allowed 0.05.",
 				"deepseek-v4-flash: baseline score avg 0.75 over 2 scored cases; candidate score avg 0.5 over 2 scored cases; score drop 0.25.",
 			].join("\n"),
 			warnings: ["fixture warning"],

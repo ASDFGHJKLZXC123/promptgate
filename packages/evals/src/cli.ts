@@ -73,6 +73,7 @@ const optionDefinitions = {
 	gateway: "string",
 	help: "boolean",
 	key: "string",
+	"max-pass-rate-drop": "string",
 	"max-score-drop": "string",
 	"min-request-interval-ms": "string",
 	prompt: "string",
@@ -87,6 +88,7 @@ const optionsByCommand: Readonly<Record<EvalCommand, readonly string[]>> = {
 		"dataset",
 		"gateway",
 		"key",
+		"max-pass-rate-drop",
 		"max-score-drop",
 		"min-request-interval-ms",
 		"prompt",
@@ -111,6 +113,7 @@ Run options:
   --key <api-key>               PromptGate evaluation key
   --admin-token <token>         Admin API token
   --allow-cache                 Allow cache during local development
+  --max-pass-rate-drop <number> Maximum acceptable baseline pass-rate drop
   --max-score-drop <number>     Maximum acceptable baseline score drop
   --min-request-interval-ms <n> Opt-in minimum gap per model request
   -h, --help                    Show this help
@@ -263,6 +266,15 @@ export async function runCli(
 		if (parsedDrop !== undefined && !Number.isFinite(parsedDrop)) {
 			throw new Error("--max-score-drop must be a finite number.");
 		}
+		const maxPassRateDrop = parsed.options["max-pass-rate-drop"];
+		const parsedPassRateDrop =
+			typeof maxPassRateDrop === "string" ? Number(maxPassRateDrop) : undefined;
+		if (
+			parsedPassRateDrop !== undefined &&
+			!Number.isFinite(parsedPassRateDrop)
+		) {
+			throw new Error("--max-pass-rate-drop must be a finite number.");
+		}
 		const rawRequestInterval =
 			typeof parsed.options["min-request-interval-ms"] === "string"
 				? parsed.options["min-request-interval-ms"]
@@ -316,6 +328,7 @@ export async function runCli(
 						: undefined,
 				baselineFromHistory: parsed.options["baseline-from-history"] === true,
 				allowCache: parsed.options["allow-cache"] === true,
+				maxPassRateDrop: parsedPassRateDrop,
 				maxScoreDrop: parsedDrop,
 				minRequestIntervalMs,
 				gitSha: env.GITHUB_SHA,
