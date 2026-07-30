@@ -405,7 +405,10 @@ function sendCacheHit(
 		// exact cached usage and zero cost, then use the same idempotent durable
 		// log/reconcile path as the live-stream abort handler.
 		reply.raw.once("close", () => {
-			if (!reply.raw.writableEnded) {
+			// writableEnded only means end() was called; queued bytes may still
+			// be lost on a reset. Treat the response as complete only after the
+			// writable side has actually emitted its successful finish.
+			if (!reply.raw.writableFinished) {
 				log.status = "client_aborted";
 				log.errorCode = null;
 				void logRequest(db, request, now, budgetGuard);
@@ -696,7 +699,7 @@ async function handleStreamingRequest(
 		}
 	};
 	const onResponseClose = (): void => {
-		if (!reply.raw.writableEnded) {
+		if (!reply.raw.writableFinished) {
 			abortForClientDisconnect();
 		}
 	};
