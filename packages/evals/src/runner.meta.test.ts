@@ -276,6 +276,37 @@ describe("Phase 5 eval-of-evals regression", () => {
 		expect(result.exitCode).toBe(1);
 	});
 
+	test.each([
+		{
+			name: "accepts an exact paired max-score-drop boundary",
+			candidateRiskScore: 0.65,
+			expectedExitCode: 0,
+		},
+		{
+			name: "rejects a paired score drop one-billionth beyond the boundary",
+			candidateRiskScore: 0.649999998,
+			expectedExitCode: 1,
+		},
+	] as const)("$name", async ({ candidateRiskScore, expectedExitCode }) => {
+		const { deps } = createFakeDependencies({ candidateRiskScore });
+		const result = await runEvaluation(
+			{
+				dataset: "meta-eval",
+				prompt: "safety@candidate",
+				baseline: "prod",
+				maxScoreDrop: 0.05,
+			},
+			{
+				...deps,
+				loadDataset: async () => ({
+					...fixture,
+					defaultTest: { threshold: 0 },
+				}),
+			},
+		);
+		expect(result.exitCode).toBe(expectedExitCode);
+	});
+
 	test("returns exit 1 solely when pass rate is below the dataset threshold", async () => {
 		const { deps } = createFakeDependencies();
 		const result = await runEvaluation(

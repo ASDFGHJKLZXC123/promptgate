@@ -224,6 +224,29 @@ function requestInterval(options: EvalRunnerOptions): number {
 	return interval;
 }
 
+/**
+ * Rejects only score drops materially above the configured boundary.
+ *
+ * Decimal scores such as 0.9 and 0.85 are not exactly representable in
+ * binary floating point, so their mathematically exact 0.05 difference can
+ * evaluate to 0.050000000000000044. One scale-adjusted machine epsilon
+ * admits only that scalar comparison roundoff.
+ */
+function scoreDropExceeds(
+	baselineScore: number,
+	candidateScore: number,
+	maximumAllowedDrop: number,
+): boolean {
+	const scoreDrop = baselineScore - candidateScore;
+	const scale = Math.max(
+		1,
+		Math.abs(baselineScore),
+		Math.abs(candidateScore),
+		Math.abs(maximumAllowedDrop),
+	);
+	return scoreDrop > maximumAllowedDrop + Number.EPSILON * scale;
+}
+
 export async function runEvaluation(
 	options: EvalRunnerOptions,
 	deps: EvalRunDependencies,
@@ -385,8 +408,11 @@ export async function runEvaluation(
 			if (
 				candidateRun.scoreAvg !== undefined &&
 				baselineRun.scoreAvg !== undefined &&
-				baselineRun.scoreAvg - candidateRun.scoreAvg >
-					(options.maxScoreDrop ?? 0.05)
+				scoreDropExceeds(
+					baselineRun.scoreAvg,
+					candidateRun.scoreAvg,
+					options.maxScoreDrop ?? 0.05,
+				)
 			)
 				qualityFail = true;
 		}
@@ -400,7 +426,11 @@ export async function runEvaluation(
 			if (
 				baselineScore !== null &&
 				candidateRun.scoreAvg !== undefined &&
-				baselineScore - candidateRun.scoreAvg > (options.maxScoreDrop ?? 0.05)
+				scoreDropExceeds(
+					baselineScore,
+					candidateRun.scoreAvg,
+					options.maxScoreDrop ?? 0.05,
+				)
 			)
 				qualityFail = true;
 		}

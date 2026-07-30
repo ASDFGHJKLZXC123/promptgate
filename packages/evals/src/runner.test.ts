@@ -255,6 +255,90 @@ describe("eval runner", () => {
 		expect(historyQuery.get("model")).toBe("deepseek-v4-flash");
 	});
 
+	test.each([
+		{
+			name: "accepts an exact historical max-score-drop boundary",
+			candidateScore: 0.85,
+			expectedExitCode: 0,
+		},
+		{
+			name: "rejects a historical score drop one-billionth beyond the boundary",
+			candidateScore: 0.849999999,
+			expectedExitCode: 1,
+		},
+	] as const)("$name", async ({ candidateScore, expectedExitCode }) => {
+		const scoredDataset = {
+			...dataset,
+			defaultTest: { threshold: 0 },
+			tests: [
+				{
+					...dataset.tests[0],
+					assert: [{ type: "llm-rubric" as const, value: "safe" }],
+				},
+			],
+		};
+		const gateway = {
+			complete: vi.fn().mockImplementation(async (call: { prompt: string }) =>
+				call.prompt === "judge_rubric_v1@1"
+					? {
+							content: JSON.stringify({
+								pass: true,
+								score: candidateScore,
+								rationale: "boundary probe",
+							}),
+							costMicroUsd: 1,
+						}
+					: { content: "candidate", costMicroUsd: 1 },
+			),
+		};
+		const admin = {
+			promptSummaries: vi.fn().mockResolvedValue([
+				{
+					id: 1,
+					slug: "safety",
+					latest_version: 2,
+					labels: [
+						{ label: "candidate", version: 2 },
+						{ label: "prod", version: 1 },
+					],
+				},
+			]),
+			upsertDataset: vi.fn().mockResolvedValue({ id: 4 }),
+			createRun: vi.fn().mockResolvedValue(undefined),
+			historicalRuns: vi.fn().mockResolvedValue([
+				{
+					id: 9,
+					dataset_slug: "safety",
+					dataset_hash: DATASET_HASH,
+					prompt_id: 1,
+					prompt_version: 1,
+					prompt_ref: "safety@prod",
+					model: "deepseek-v4-flash",
+					cases_total: 1,
+					score_avg: 0.9,
+				},
+			]),
+		};
+
+		const result = await runEvaluation(
+			{
+				dataset: "safety",
+				prompt: "safety@candidate",
+				baseline: "prod",
+				baselineFromHistory: true,
+				maxScoreDrop: 0.05,
+			},
+			{
+				gateway,
+				admin,
+				loadDataset: vi.fn().mockResolvedValue(scoredDataset),
+			},
+		);
+
+		expect(result.exitCode).toBe(expectedExitCode);
+		expect(admin.createRun).toHaveBeenCalledTimes(1);
+	});
+
 	test("rejects absent or mismatched baseline history before mutation or provider traffic", async () => {
 		const exactHistory = {
 			id: 9,

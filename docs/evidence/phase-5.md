@@ -2,15 +2,14 @@
 
 Date: 2026-07-29
 
-Status: **incomplete — the fresh DeepSeek-target/Terra-judge good pair is
-green, but the separately fresh degraded pair stopped with infrastructure
-exit 2 during its production baseline**. Deliberately weakened
-`safety_screen` v2 exists and `candidate` points to it, while `prod` remains
-v1. The sole owner-authorized paid degraded invocation recorded one sanitized
-DeepSeek `provider_error` before any v2 request or new eval run, so the
-expected exit 1 and degraded failure table do not exist. Its disposable key is
-disabled after 9,776 micro-USD. Phase 5 remains verify-pending and blocked;
-checkpoint B1, checkpoint B2, and Phase 6 have not started.
+Status: **live Verify complete; checkpoint B1 completed with adjustments;
+checkpoint B2 pending**. The fresh good pair returned 0, and the separately
+fresh degraded retry compared `prod` v1 with deliberately weakened
+`candidate` v2, printed eight named failures, persisted both 50-result runs,
+and returned the expected quality exit 1. Checkpoint B1 independently
+confirmed the technical gate after requiring a scalar floating-point boundary
+correction and this formerly stale lead-status correction. No additional live
+call was needed. Checkpoint B2 and Phase 6 have not started.
 
 ## Prior committed Gemini-judge attempt
 
@@ -1449,3 +1448,56 @@ Phase 5's live Verify is complete: the good prompt produced the required exit
 produced the required exit 1 with a named failure table and durable
 same-judge comparison. Checkpoint B1 is next, followed by checkpoint B2 and
 the human completion gate. No checkpoint or Phase 6 work was started here.
+
+## Checkpoint B1 technical audit — 2026-07-29
+
+GPT-5.6 Sol / xhigh independently audited committed target `92a086d` against
+the Phase 5 playbook, GUIDE §7.2 and §11, the eval/shared/gateway code and
+tests, the complete good/degraded evidence, and the stopped database. It ran
+129 focused offline tests, confirmed that the direct source binary returned 0
+for help and preserved infrastructure exit 2, and independently reconciled
+runs 2–5 plus the request/result/cost totals for disposable keys 23 and 25.
+
+The reviewer found two required adjustments:
+
+1. Both paired and historical score-drop branches compared raw IEEE-754
+   subtraction directly with `--max-score-drop`. Baseline `0.9`, candidate
+   `0.85`, and maximum `0.05` therefore produced
+   `0.050000000000000044 > 0.05` and incorrectly returned quality exit 1,
+   despite §7.2 requiring failure only for a drop *more than* the boundary.
+2. This evidence file's leading status still described the first degraded
+   attempt's provider blocker even though the later authorized retry had
+   completed successfully.
+
+The bounded correction adds one scalar comparator shared by the paired and
+historical branches. It permits only one scale-adjusted machine epsilon:
+
+```text
+score_drop > maximum_allowed_drop
+             + Number.EPSILON
+             × max(1, |baseline|, |candidate|, |maximum|)
+```
+
+All inputs are constrained to `[0, 1]`, so this admits only one machine epsilon
+of comparison roundoff and does not reuse the wider, scored-count-scaled
+aggregate-readback tolerance. Four path-level regressions prove that an exact
+`0.05` paired or historical drop returns 0 while a one-billionth-larger drop
+returns 1. The stale lead status is corrected above.
+
+The reviewer found no other technical defect. Assertion ordering and
+deterministic short-circuiting, 0/1/2 exit classification, frozen
+DeepSeek/Terra mapping, immutable judge prompt, no-cache/history/self-judge
+rails, transactional persistence, strict aggregate validation, durability,
+and the eval-of-evals meta-test all passed review. The recorded live degraded
+drop `0.20714285714285707` remains far outside the corrected boundary, so no
+provider rerun is required.
+
+The post-correction gate passed 74 focused tests across five files, all 745
+tests across 57 files, lint across 154 files, and the strict four-package
+build. The same Sol / xhigh reviewer then audited the correction diff,
+confirmed that all four regressions exercise their intended paired/history
+branches, found the evidence and progress state consistent, and returned
+`APPROVE`.
+
+Checkpoint B1 verdict: **proceed with adjustments**. The two adjustments are
+applied. Checkpoint B2 is next; Phase 6 remains not started.
