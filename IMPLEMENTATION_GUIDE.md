@@ -409,7 +409,7 @@ Supported assertion types (v1): `equals`, `contains`, `icontains`, `regex`, `is-
 ```
 
 - All eval traffic goes **through the gateway itself** (dogfooding: evals get metered and budgeted like any client) with `pg_no_cache: true` — persisted quality measurements must hit live models or drift stays invisible (`--allow-cache` exists for local harness development only and marks the run `trigger: 'manual'`). The human-approved Phase 5 matrix contains exactly **`deepseek-v4-flash`** as its target; **`gpt-5.6-terra`** is used only to judge declared rubrics. Neither model judges itself. Each judge uses `reasoning_effort: "high"`, `response_format: {type: "json_object"}`, and the immutable registry prompt `judge_rubric_v1@1`.
-- Phase 5 DeepSeek target requests use `temperature: 0`; `gpt-5.6-terra` judge requests omit the temperature field while retaining high reasoning effort and JSON-object output. A workable `OPENAI_API_KEY` is required for the live Terra judge, while `DEEPSEEK_API_KEY` remains required for the target. Gemini remains a supported gateway provider but is no longer part of the active Phase 5 target/judge topology. This amendment does not waive Phase 6's separate four-provider requirement.
+- Phase 5 DeepSeek target requests use `temperature: 0`; `gpt-5.6-terra` judge requests omit the temperature field while retaining high reasoning effort and JSON-object output. A workable `OPENAI_API_KEY` is required for the live Terra judge, while `DEEPSEEK_API_KEY` remains required for the target. Gemini remains a supported gateway provider but is no longer part of the active Phase 5 target/judge topology. Phase 6 separately requires dedicated provider-side-capped CI credentials for all four supported providers, but its quality gate retains this same fresh paired DeepSeek-target/Terra-judge topology.
 - `--min-request-interval-ms` is an opt-in, non-negative safe-integer delay (default `0`; ambient environment values cannot enable it). It applies one shared start-time queue per model across all target and judge calls in each paired command; it neither retries failures nor changes caching, budgets, datasets, models, or exit codes. Use `15000` for the DeepSeek-led gate. Each paired command can invoke up to fourteen Terra rubric judgments: seven for the fresh baseline and seven for the candidate.
 - Label freezing: at run start, every label ref (`@candidate`, `@prod`) is resolved to a concrete version once; all cases in the run use that version, and it's what `eval_runs.prompt_version` records.
 - One `eval_runs` row per model: N models in the dataset = N runs sharing a `git_sha`, each with its own results (matches the schema's `(run_id, case_id)` key).
@@ -432,6 +432,8 @@ Supported assertion types (v1): `equals`, `contains`, `icontains`, `regex`, `is-
 - Case ids are stable slugs (`self_harm_explicit_01`), because `eval_results` keys on them across runs.
 
 ### 7.4 CI gate (deliverable 3)
+
+The human-approved Phase 6 interpretation is **four capped credentials, one live quality topology**: CI must receive dedicated provider-side-spend-limited credentials for OpenAI, Anthropic, Gemini, and DeepSeek, while the paired evaluation remains the canonical `deepseek-v4-flash` target judged by `gpt-5.6-terra`. Anthropic and Gemini receive no eval traffic in this gate, so their configured presence must not be reported as live adapter verification.
 
 ```yaml
 # .github/workflows/eval-gate.yml (sketch — pin all actions to full commit SHAs in the real file)
