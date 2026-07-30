@@ -2,10 +2,6 @@ name: eval-gate
 
 on:
   pull_request:
-    paths:
-      - "packages/gateway/**"
-      - "packages/evals/**"
-      - "packages/shared/**"
 
 permissions:
   contents: read
@@ -15,29 +11,88 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  evals:
-    name: eval-gate
+  detect:
+    name: detect-eval-scope
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    outputs:
+      relevant: ${{ steps.scope.outputs.relevant }}
+      trusted: ${{ steps.scope.outputs.trusted }}
     steps:
-      - name: Enforce trusted pull-request source
+      - name: Checkout pull-request history
+        # actions/checkout@v6.1.0
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Detect evaluation scope and trust boundary
+        id: scope
         shell: bash
         env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           PR_HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
           CURRENT_REPOSITORY: ${{ github.repository }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
           PR_ACTOR: ${{ github.actor }}
         run: |
           set -Eeuo pipefail
 
-          if [[ "$PR_HEAD_REPOSITORY" != "$CURRENT_REPOSITORY" || "$PR_ACTOR" == "dependabot[bot]" ]]; then
-            {
-              printf '## PromptGate evaluation gate\n\n'
-              printf 'Live evaluation is unavailable for untrusted pull-request sources because provider secrets are withheld.\n'
-            } >> "$GITHUB_STEP_SUMMARY"
-            echo "::error::Run this change from a trusted same-repository branch before merge."
-            exit 1
+          trusted=false
+          if [[ "$PR_HEAD_REPOSITORY" == "$CURRENT_REPOSITORY" &&
+            "$PR_AUTHOR" != "dependabot[bot]" &&
+            "$PR_ACTOR" != "dependabot[bot]" ]]
+          then
+            trusted=true
           fi
+          printf 'trusted=%s\n' "$trusted" >> "$GITHUB_OUTPUT"
 
+          relevant=true
+          changed_file_list="${RUNNER_TEMP}/promptgate-changed-files"
+          if [[ "$BASE_SHA" =~ ^[a-f0-9]{40}$ && "$HEAD_SHA" =~ ^[a-f0-9]{40}$ ]] &&
+            git diff --name-only --no-renames -z "$BASE_SHA...$HEAD_SHA" > "$changed_file_list"
+          then
+            relevant=false
+            while IFS= read -r -d '' changed_file; do
+              case "$changed_file" in
+                packages/gateway/* | \
+                packages/evals/* | \
+                packages/shared/* | \
+                Dockerfile | \
+                docker-compose.yml | \
+                .dockerignore | \
+                .nvmrc | \
+                package.json | \
+                pnpm-lock.yaml | \
+                pnpm-workspace.yaml | \
+                tsconfig.base.json | \
+                .github/workflows/eval-gate.yml | \
+                .github/workflows/ci.yml | \
+                .github/actions/*)
+                  relevant=true
+                  break
+                  ;;
+              esac
+            done < "$changed_file_list"
+          else
+            echo "::warning::The pull-request diff could not be resolved; running the live gate fail-closed."
+          fi
+          rm -f -- "$changed_file_list"
+
+          printf 'relevant=%s\n' "$relevant" >> "$GITHUB_OUTPUT"
+          {
+            printf '## PromptGate evaluation scope\n\n'
+            printf -- '- Relevant change: `%s`\n' "$relevant"
+            printf -- '- Trusted source: `%s`\n' "$trusted"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  evaluate:
+    name: live-evaluation
+    needs: detect
+    if: needs.detect.outputs.relevant == 'true' && needs.detect.outputs.trusted == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
       - name: Checkout repository
         # actions/checkout@v6.1.0
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
@@ -226,3 +281,54 @@ jobs:
             exit 2
           fi
           exit "$cleanup_status"
+
+  gate:
+    name: eval-gate
+    if: always()
+    needs: [detect, evaluate]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Publish required evaluation conclusion
+        shell: bash
+        env:
+          DETECT_RESULT: ${{ needs.detect.result }}
+          RELEVANT: ${{ needs.detect.outputs.relevant }}
+          TRUSTED: ${{ needs.detect.outputs.trusted }}
+          EVALUATE_RESULT: ${{ needs.evaluate.result }}
+        run: |
+          set -Eeuo pipefail
+
+          {
+            printf '## PromptGate required check\n\n'
+            printf -- '- Scope detector: `%s`\n' "$DETECT_RESULT"
+            printf -- '- Relevant change: `%s`\n' "${RELEVANT:-unknown}"
+            printf -- '- Trusted source: `%s`\n' "${TRUSTED:-unknown}"
+            printf -- '- Live evaluation: `%s`\n' "$EVALUATE_RESULT"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if [[ "$DETECT_RESULT" != "success" ]]; then
+            echo "::error::Evaluation scope detection failed."
+            exit 1
+          fi
+          if [[ ! "$RELEVANT" =~ ^(true|false)$ || ! "$TRUSTED" =~ ^(true|false)$ ]]; then
+            echo "::error::Evaluation scope detection returned invalid outputs."
+            exit 1
+          fi
+          if [[ "$RELEVANT" != "true" ]]; then
+            if [[ "$EVALUATE_RESULT" != "skipped" ]]; then
+              echo "::error::An irrelevant change produced an unexpected live-evaluation result."
+              exit 1
+            fi
+            printf 'No live provider evaluation was required for this pull request.\n' >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          if [[ "$TRUSTED" != "true" ]]; then
+            echo "::error::Relevant changes require a trusted same-repository branch."
+            exit 1
+          fi
+          if [[ "$EVALUATE_RESULT" != "success" ]]; then
+            echo "::error::The live PromptGate evaluation did not pass."
+            exit 1
+          fi
+
+          printf 'The live PromptGate evaluation passed.\n' >> "$GITHUB_STEP_SUMMARY"

@@ -442,34 +442,73 @@ The human-approved 2026-07-29 **Recovery A** contract narrows seeder replay to o
 name: eval-gate
 on:
   pull_request:
-    paths: ["packages/gateway/**", "packages/evals/**", "packages/shared/**"]
+permissions:
+  contents: read
 jobs:
-  evals:
+  detect:
+    # no secrets; checkout full PR history and inspect the merge-base...head PR diff
     runs-on: ubuntu-latest
-    # fork PRs don't receive secrets (GitHub default), so this job is inert for untrusted PRs by construction
+    outputs:
+      relevant: ${{ steps.scope.outputs.relevant }}
+      trusted: ${{ steps.scope.outputs.trusted }}
     steps:
       - uses: actions/checkout@<pinned-sha>
-      - uses: pnpm/action-setup@<pinned-sha>
-      - run: pnpm install --frozen-lockfile
-      - name: Write .env for the gateway container   # compose reads .env — secrets must reach the container
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - id: scope
         run: |
-          echo "ADMIN_TOKEN=$(openssl rand -hex 24)" >> .env
-          echo "ANTHROPIC_API_KEY=${{ secrets.ANTHROPIC_API_KEY }}" >> .env
-          echo "OPENAI_API_KEY=${{ secrets.OPENAI_API_KEY }}" >> .env
-          echo "GEMINI_API_KEY=${{ secrets.GEMINI_API_KEY }}" >> .env
-          echo "DEEPSEEK_API_KEY=${{ secrets.DEEPSEEK_API_KEY }}" >> .env
-          grep ADMIN_TOKEN .env >> "$GITHUB_ENV"     # pg-eval needs it too
-      - run: docker compose up -d --wait             # gateway + fresh sqlite
-      - run: ./node_modules/.bin/pg-eval seed-ci   # $1 ci key, prompts, labels, dataset
-      - run: >
-          ./node_modules/.bin/pg-eval run
-          --dataset safety_screening --prompt safety_screen@candidate
-          --baseline prod --min-request-interval-ms 15000
-                                                    # paired: runs prod then candidate in this fresh DB
-      - run: ./node_modules/.bin/pg-eval comment   # optional PR summary, needs GITHUB_TOKEN
+          # The real workflow computes trusted/relevant outputs from the complete
+          # merge-base...head PR diff and defaults unresolved diffs to relevant.
+
+  evaluate:
+    name: live-evaluation
+    needs: detect
+    if: needs.detect.outputs.relevant == 'true' && needs.detect.outputs.trusted == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@<pinned-sha>
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@<pinned-sha>
+      - uses: actions/setup-node@<pinned-sha>
+      - run: pnpm install --frozen-lockfile
+      - name: Build the gateway without provider credentials
+        run: |
+          # Create only the temporary mode-0600 placeholder .env required by
+          # Compose, build, then remove it before real secrets are available.
+          docker compose build
+      - name: Write the mode-0600 runtime environment
+        run: |
+          # Validate all four step-scoped secrets without printing them.
+          # Write ADMIN_TOKEN + provider keys to .env for Compose.
+          # Export PG_GATEWAY_URL, PG_ADMIN_TOKEN, and PG_EVAL_KEY_FILE.
+      - run: docker compose up -d --no-build --wait
+      - run: ./node_modules/.bin/pg-eval seed-ci
+      - run: |
+          # Read, validate, and mask PG_EVAL_KEY_FILE only in this step, then run:
+          ./node_modules/.bin/pg-eval run \
+            --dataset safety_screening --prompt safety_screen@candidate \
+            --baseline prod --min-request-interval-ms 15000
+      - if: always()
+        run: |
+          # The real workflow bounds and validates graceful Compose shutdown,
+          # leaves SQLite untouched on failure, and removes secret handoffs.
+
+  gate:
+    name: eval-gate
+    if: always()
+    needs: [detect, evaluate]
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          # The real workflow returns one definite required-check conclusion:
+          # green irrelevant, green live-pass, red detector/trust/live failure.
 ```
 
-Cost control in CI (the decision-#2 trade-off, mitigated): the CI gateway key is created with a **$1 monthly circuit-breaker budget** enforced by reserve-then-reconcile (§3.5) — a runaway loop fails the build with `budget_exceeded`; cheap pinned models; fresh DB per run keeps runs honest (the pennies are the price of trust). Secret hardening: use **dedicated provider keys for CI with provider-side spend limits as the absolute monetary wall** (the gateway estimate cannot stop PR code from calling providers directly with the env keys), keep the workflow on `pull_request` (not `pull_request_target`), and pin actions to full commit SHAs.
+The human-approved 2026-07-29 stable-required-check amendment removes event-level path filtering because GitHub leaves path-skipped required workflows pending. The no-secret detector marks these paths relevant: `packages/gateway/**`, `packages/evals/**`, `packages/shared/**`, `Dockerfile`, `docker-compose.yml`, `.dockerignore`, `.nvmrc`, `package.json`, `pnpm-lock.yaml`, `pnpm-workspace.yaml`, `tsconfig.base.json`, `.github/workflows/eval-gate.yml`, `.github/workflows/ci.yml`, and `.github/actions/**`. Diff failure defaults to relevant. Irrelevant changes produce a green no-provider aggregate; relevant fork or Dependabot changes fail closed without receiving secrets; relevant trusted changes must pass the live job. The aggregate job named `eval-gate` always reports a definite result and is the branch-protection context.
+
+Cost control in CI (the decision-#2 trade-off, mitigated): the CI gateway key is created with a **$1 monthly circuit-breaker budget** enforced by reserve-then-reconcile (§3.5) — a runaway loop fails the build with `budget_exceeded`; cheap pinned models; fresh DB per run keeps runs honest (the pennies are the price of trust). Secret hardening: use **dedicated provider keys for CI with provider-side spend limits as the absolute monetary wall** (the gateway estimate cannot stop PR code from calling providers directly with the env keys), keep the workflow on `pull_request` (not `pull_request_target`), and pin actions to full commit SHAs. Protect the repository default branch (currently `master`, without renaming it for Phase 6), require stable job checks `ci` and `eval-gate`, apply the rule to administrators, and require branches to be current before merge.
 
 ---
 
