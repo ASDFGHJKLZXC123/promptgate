@@ -299,6 +299,17 @@ describe("Phase 6 eval-gate workflow", () => {
 		expect(source).not.toContain("pull_request_target");
 	});
 
+	test("keeps one paired no-retry live invocation with the default score-drop band", async () => {
+		const source = await readFile(workflowUrl, "utf8");
+
+		expect(source.match(/pg-eval run/g)).toHaveLength(1);
+		expect(source).toContain("--baseline prod");
+		expect(source).not.toMatch(/retry/i);
+		expect(source).not.toContain("--max-score-drop");
+		expect(source).not.toContain("--baseline-from-history");
+		expect(source).not.toContain("--allow-cache");
+	});
+
 	test("gives the ordinary CI workflow the stable required-check name", async () => {
 		const source = await readFile(ciWorkflowUrl, "utf8");
 		const workflow = parse(source);
