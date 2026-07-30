@@ -193,6 +193,11 @@ jobs:
             printf 'PG_EVAL_KEY_FILE=%s\n' "$key_file"
           } >> "$GITHUB_ENV"
 
+      - name: Seed approved model pricing
+        run: >-
+          docker compose run --rm --no-deps gateway
+          node dist/scripts/seed-pricing.js --db-path /data/promptgate.db
+
       - name: Start fresh PromptGate gateway
         run: docker compose up -d --no-build --wait
 

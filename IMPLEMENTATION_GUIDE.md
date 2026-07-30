@@ -483,6 +483,9 @@ jobs:
           # Validate all four step-scoped secrets without printing them.
           # Write ADMIN_TOKEN + provider keys to .env for Compose.
           # Export PG_GATEWAY_URL, PG_ADMIN_TOKEN, and PG_EVAL_KEY_FILE.
+      - run: >-
+          docker compose run --rm --no-deps gateway
+          node dist/scripts/seed-pricing.js --db-path /data/promptgate.db
       - run: docker compose up -d --no-build --wait
       - run: ./node_modules/.bin/pg-eval seed-ci
       - run: |
