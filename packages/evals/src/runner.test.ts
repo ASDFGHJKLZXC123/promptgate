@@ -516,6 +516,288 @@ describe("eval runner", () => {
 		});
 	});
 
+	test("runs a same-version pair once as the candidate, persists one run, and names both refs", async () => {
+		const scoredDataset = {
+			...dataset,
+			tests: [
+				{
+					...dataset.tests[0],
+					assert: [{ type: "llm-rubric" as const, value: "safe" }],
+				},
+			],
+		};
+		const gateway = {
+			complete: vi.fn().mockImplementation(async (call: { prompt: string }) =>
+				call.prompt === "judge_rubric_v1@1"
+					? {
+							content: '{"pass":true,"score":0.9,"rationale":"ok"}',
+							costMicroUsd: 1,
+						}
+					: { content: "candidate", costMicroUsd: 1 },
+			),
+		};
+		const admin = {
+			promptSummaries: vi.fn().mockResolvedValue([
+				{
+					id: 1,
+					slug: "safety",
+					latest_version: 2,
+					labels: [
+						{ label: "candidate", version: 1 },
+						{ label: "prod", version: 1 },
+					],
+				},
+			]),
+			upsertDataset: vi.fn().mockResolvedValue({ id: 4 }),
+			createRun: vi.fn().mockResolvedValue(undefined),
+			historicalRuns: vi.fn(),
+		};
+		const result = await runEvaluation(
+			{ dataset: "safety", prompt: "safety@candidate", baseline: "prod" },
+			{
+				gateway,
+				admin,
+				loadDataset: vi.fn().mockResolvedValue(scoredDataset),
+				gitSha: () => "1234567",
+			},
+		);
+		expect(result.exitCode).toBe(0);
+		expect(gateway.complete.mock.calls.map(([call]) => call.prompt)).toEqual([
+			"safety@1",
+			"judge_rubric_v1@1",
+		]);
+		expect(admin.createRun).toHaveBeenCalledTimes(1);
+		expect(admin.createRun.mock.calls[0]?.[0]).toMatchObject({
+			prompt_ref: "safety@candidate",
+			prompt_version: 1,
+		});
+		expect(admin.historicalRuns).not.toHaveBeenCalled();
+		expect(result.markdown).toContain("| case-a | deepseek-v4-flash | pass |");
+		expect(result.markdown).toContain(
+			"Baseline safety@prod and candidate safety@candidate resolved to the same prompt version 1; the candidate ran once and the score drop is zero.",
+		);
+		expect(result.markdown).toContain(
+			"deepseek-v4-flash: baseline score avg 0.9 over 1 scored cases; candidate score avg 0.9 over 1 scored cases; score drop 0.",
+		);
+	});
+
+	test("fails a same-version pair below the dataset threshold with one persisted run", async () => {
+		const scoredDataset = {
+			...dataset,
+			tests: [
+				{
+					...dataset.tests[0],
+					assert: [{ type: "llm-rubric" as const, value: "safe" }],
+				},
+			],
+		};
+		const gateway = {
+			complete: vi.fn().mockImplementation(async (call: { prompt: string }) =>
+				call.prompt === "judge_rubric_v1@1"
+					? {
+							content: '{"pass":false,"score":0.3,"rationale":"weak"}',
+							costMicroUsd: 1,
+						}
+					: { content: "candidate", costMicroUsd: 1 },
+			),
+		};
+		const admin = {
+			promptSummaries: vi.fn().mockResolvedValue([
+				{
+					id: 1,
+					slug: "safety",
+					latest_version: 1,
+					labels: [
+						{ label: "candidate", version: 1 },
+						{ label: "prod", version: 1 },
+					],
+				},
+			]),
+			upsertDataset: vi.fn().mockResolvedValue({ id: 4 }),
+			createRun: vi.fn().mockResolvedValue(undefined),
+			historicalRuns: vi.fn(),
+		};
+		const result = await runEvaluation(
+			{ dataset: "safety", prompt: "safety@candidate", baseline: "prod" },
+			{
+				gateway,
+				admin,
+				loadDataset: vi.fn().mockResolvedValue(scoredDataset),
+				gitSha: () => "1234567",
+			},
+		);
+		expect(result.exitCode).toBe(1);
+		expect(gateway.complete).toHaveBeenCalledTimes(2);
+		expect(admin.createRun).toHaveBeenCalledTimes(1);
+		expect(result.markdown).toContain("| case-a | deepseek-v4-flash | fail |");
+	});
+
+	test.each([
+		{
+			name: "keeps a distinct-version pair green on the exact drop boundary",
+			candidateScore: 0.85,
+			expectedExitCode: 0,
+		},
+		{
+			name: "keeps a distinct-version pair red one-billionth past the boundary",
+			candidateScore: 0.849999999,
+			expectedExitCode: 1,
+		},
+	] as const)("$name", async ({ candidateScore, expectedExitCode }) => {
+		const scoredDataset = {
+			...dataset,
+			defaultTest: { threshold: 0 },
+			tests: [
+				{
+					...dataset.tests[0],
+					assert: [{ type: "llm-rubric" as const, value: "safe" }],
+				},
+			],
+		};
+		const gateway = {
+			complete: vi
+				.fn()
+				.mockImplementation(
+					async (call: { prompt: string; vars: Record<string, unknown> }) => {
+						if (call.prompt !== "judge_rubric_v1@1")
+							return { content: `output ${call.prompt}`, costMicroUsd: 1 };
+						const payload = JSON.parse(String(call.vars.payload)) as {
+							candidate: string;
+						};
+						const score = payload.candidate.includes("safety@2")
+							? candidateScore
+							: 0.9;
+						return {
+							content: JSON.stringify({ pass: true, score, rationale: "ok" }),
+							costMicroUsd: 1,
+						};
+					},
+				),
+		};
+		const admin = {
+			promptSummaries: vi.fn().mockResolvedValue([
+				{
+					id: 1,
+					slug: "safety",
+					latest_version: 2,
+					labels: [
+						{ label: "candidate", version: 2 },
+						{ label: "prod", version: 1 },
+					],
+				},
+			]),
+			upsertDataset: vi.fn().mockResolvedValue({ id: 4 }),
+			createRun: vi.fn().mockResolvedValue(undefined),
+			historicalRuns: vi.fn(),
+		};
+		const result = await runEvaluation(
+			{
+				dataset: "safety",
+				prompt: "safety@candidate",
+				baseline: "prod",
+				maxScoreDrop: 0.05,
+			},
+			{
+				gateway,
+				admin,
+				loadDataset: vi.fn().mockResolvedValue(scoredDataset),
+				gitSha: () => "1234567",
+			},
+		);
+		expect(result.exitCode).toBe(expectedExitCode);
+		expect(admin.createRun).toHaveBeenCalledTimes(2);
+		expect(admin.createRun.mock.calls.map(([body]) => body)).toEqual([
+			expect.objectContaining({ prompt_ref: "safety@prod", prompt_version: 1 }),
+			expect.objectContaining({
+				prompt_ref: "safety@candidate",
+				prompt_version: 2,
+			}),
+		]);
+		expect(result.markdown).toContain(
+			"baseline score avg 0.9 over 1 scored cases",
+		);
+		expect(result.markdown).toContain(
+			`candidate score avg ${candidateScore} over 1 scored cases`,
+		);
+		expect(result.markdown).not.toContain(
+			"resolved to the same prompt version",
+		);
+	});
+
+	test("keeps historical comparison unchanged when history resolves to the candidate version", async () => {
+		const scoredDataset = {
+			...dataset,
+			defaultTest: { threshold: 0 },
+			tests: [
+				{
+					...dataset.tests[0],
+					assert: [{ type: "llm-rubric" as const, value: "safe" }],
+				},
+			],
+		};
+		const gateway = {
+			complete: vi.fn().mockImplementation(async (call: { prompt: string }) =>
+				call.prompt === "judge_rubric_v1@1"
+					? {
+							content: '{"pass":true,"score":0.849999999,"rationale":"probe"}',
+							costMicroUsd: 1,
+						}
+					: { content: "candidate", costMicroUsd: 1 },
+			),
+		};
+		const admin = {
+			promptSummaries: vi.fn().mockResolvedValue([
+				{
+					id: 1,
+					slug: "safety",
+					latest_version: 2,
+					labels: [
+						{ label: "candidate", version: 2 },
+						{ label: "prod", version: 2 },
+					],
+				},
+			]),
+			upsertDataset: vi.fn().mockResolvedValue({ id: 4 }),
+			createRun: vi.fn().mockResolvedValue(undefined),
+			historicalRuns: vi.fn().mockResolvedValue([
+				{
+					id: 9,
+					dataset_slug: "safety",
+					dataset_hash: DATASET_HASH,
+					prompt_id: 1,
+					prompt_version: 2,
+					prompt_ref: "safety@prod",
+					model: "deepseek-v4-flash",
+					cases_total: 1,
+					score_avg: 0.9,
+				},
+			]),
+		};
+		const result = await runEvaluation(
+			{
+				dataset: "safety",
+				prompt: "safety@candidate",
+				baseline: "prod",
+				baselineFromHistory: true,
+				maxScoreDrop: 0.05,
+			},
+			{
+				gateway,
+				admin,
+				loadDataset: vi.fn().mockResolvedValue(scoredDataset),
+			},
+		);
+		expect(result.exitCode).toBe(1);
+		expect(gateway.complete.mock.calls.map(([call]) => call.prompt)).toEqual([
+			"safety@2",
+			"judge_rubric_v1@1",
+		]);
+		expect(admin.createRun).toHaveBeenCalledTimes(1);
+		expect(result.markdown).not.toContain(
+			"resolved to the same prompt version",
+		);
+	});
+
 	test("applies local cache opt-in to target and judge calls and records their combined cost", async () => {
 		const scoredDataset = {
 			...dataset,

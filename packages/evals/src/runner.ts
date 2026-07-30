@@ -134,6 +134,23 @@ export function resolveGitSha(
 function markdownCell(value: string): string {
 	return value.replaceAll("|", "\\|").replaceAll(/[\r\n]+/g, " ");
 }
+function scoredCases(run: ModelResult): number {
+	return run.results.filter((item) => item.score !== undefined).length;
+}
+function comparisonLine(
+	baselineRun: ModelResult,
+	candidateRun: ModelResult,
+	scoreDrop?: number,
+): string {
+	const drop =
+		scoreDrop ??
+		(baselineRun.scoreAvg !== undefined && candidateRun.scoreAvg !== undefined
+			? baselineRun.scoreAvg - candidateRun.scoreAvg
+			: undefined);
+	const side = (label: string, run: ModelResult) =>
+		`${label} score avg ${run.scoreAvg ?? "none"} over ${scoredCases(run)} scored cases`;
+	return `${candidateRun.model}: ${side("baseline", baselineRun)}; ${side("candidate", candidateRun)}; score drop ${drop ?? "unavailable"}.`;
+}
 function markdown(results: readonly ModelResult[]): string {
 	return [
 		"| case | model | pass | score | first failed detail |",
@@ -291,6 +308,14 @@ export async function runEvaluation(
 				);
 	if (baseline?.ref === candidate.ref)
 		throw new EvalRunError("Baseline ref must differ from candidate ref.");
+	// A fresh pair whose refs freeze to one identical version would measure
+	// judge nondeterminism, not a prompt change, so it runs once as the
+	// candidate with its score drop defined as zero.
+	const samePairedVersion =
+		baseline !== undefined &&
+		!options.baselineFromHistory &&
+		baseline.id === candidate.id &&
+		baseline.version === candidate.version;
 	const historyScores = new Map<string, number | null>();
 	if (options.baselineFromHistory && baseline) {
 		for (const model of dataset.providers) {
@@ -364,7 +389,7 @@ export async function runEvaluation(
 			})),
 		});
 	const baselineRuns: ModelResult[] = [];
-	if (baseline && !options.baselineFromHistory)
+	if (baseline && !options.baselineFromHistory && !samePairedVersion)
 		for (const model of dataset.providers) {
 			const result = await runModel(
 				dataset,
@@ -393,7 +418,15 @@ export async function runEvaluation(
 	let qualityFail = candidateRuns.some(
 		(run) => run.passRate < dataset.defaultTest.threshold,
 	);
-	if (baseline && !options.baselineFromHistory)
+	const summary: string[] = [];
+	if (baseline && samePairedVersion) {
+		summary.push(
+			`Baseline ${baseline.ref} and candidate ${candidate.ref} resolved to the same prompt version ${candidate.version}; the candidate ran once and the score drop is zero.`,
+		);
+		for (const candidateRun of candidateRuns)
+			summary.push(comparisonLine(candidateRun, candidateRun, 0));
+	}
+	if (baseline && !options.baselineFromHistory && !samePairedVersion)
 		for (const candidateRun of candidateRuns) {
 			const baselineRun = baselineRuns.find(
 				(item) => item.model === candidateRun.model,
@@ -415,6 +448,7 @@ export async function runEvaluation(
 				)
 			)
 				qualityFail = true;
+			summary.push(comparisonLine(baselineRun, candidateRun));
 		}
 	if (options.baselineFromHistory) {
 		for (const candidateRun of candidateRuns) {
@@ -437,7 +471,7 @@ export async function runEvaluation(
 	}
 	return {
 		exitCode: qualityFail ? 1 : 0,
-		markdown: markdown(candidateRuns),
+		markdown: [markdown(candidateRuns), ...summary].join("\n"),
 		warnings: dataset.warnings,
 	};
 }

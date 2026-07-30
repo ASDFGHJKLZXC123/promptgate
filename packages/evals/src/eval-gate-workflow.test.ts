@@ -269,6 +269,18 @@ describe("Phase 6 eval-gate workflow", () => {
 		expect(source.indexOf("docker compose build")).toBeLessThan(
 			source.indexOf("secrets.OPENAI_API_KEY"),
 		);
+		const prepareIndex = source.indexOf(
+			"- name: Prepare isolated gateway environment",
+		);
+		const pricingIndex = source.indexOf("- name: Seed approved model pricing");
+		const startIndex = source.indexOf("- name: Start fresh PromptGate gateway");
+		expect(prepareIndex).toBeGreaterThan(-1);
+		expect(pricingIndex).toBeGreaterThan(prepareIndex);
+		expect(startIndex).toBeGreaterThan(pricingIndex);
+		expect(source).toContain("docker compose run --rm --no-deps gateway");
+		expect(source).toContain(
+			"node dist/scripts/seed-pricing.js --db-path /data/promptgate.db",
+		);
 		expect(source).toContain("docker compose up -d --no-build --wait");
 		expect(source).toContain("./node_modules/.bin/pg-eval seed-ci");
 		expect(source).toContain("--dataset safety_screening");
@@ -285,6 +297,17 @@ describe("Phase 6 eval-gate workflow", () => {
 		expect(source).not.toContain("--baseline-from-history");
 		expect(source).not.toContain("pg-eval comment");
 		expect(source).not.toContain("pull_request_target");
+	});
+
+	test("keeps one paired no-retry live invocation with the default score-drop band", async () => {
+		const source = await readFile(workflowUrl, "utf8");
+
+		expect(source.match(/pg-eval run/g)).toHaveLength(1);
+		expect(source).toContain("--baseline prod");
+		expect(source).not.toMatch(/retry/i);
+		expect(source).not.toContain("--max-score-drop");
+		expect(source).not.toContain("--baseline-from-history");
+		expect(source).not.toContain("--allow-cache");
 	});
 
 	test("gives the ordinary CI workflow the stable required-check name", async () => {
