@@ -109,6 +109,35 @@ describe("eval runner", () => {
 		},
 	);
 
+	test.each([-1, 1.5, Number.NaN, Number.POSITIVE_INFINITY])(
+		"rejects invalid max-pass-rate-drop option %s before dataset or service work",
+		async (maxPassRateDrop) => {
+			const gateway = { complete: vi.fn() };
+			const admin = {
+				promptSummaries: vi.fn(),
+				upsertDataset: vi.fn(),
+				createRun: vi.fn(),
+				historicalRuns: vi.fn(),
+			};
+			const loadDataset = vi.fn();
+			await expect(
+				runEvaluation(
+					{
+						dataset: "safety",
+						prompt: "safety@candidate",
+						maxPassRateDrop,
+					},
+					{ gateway, admin, loadDataset },
+				),
+			).rejects.toThrow(
+				"max-pass-rate-drop must be a finite number between 0 and 1",
+			);
+			expect(loadDataset).not.toHaveBeenCalled();
+			expect(admin.promptSummaries).not.toHaveBeenCalled();
+			expect(gateway.complete).not.toHaveBeenCalled();
+		},
+	);
+
 	test("rejects ambiguous or unavailable concrete prompt refs before mutation or provider traffic", async () => {
 		const gateway = { complete: vi.fn() };
 		const upsertDataset = vi.fn();
@@ -204,6 +233,7 @@ describe("eval runner", () => {
 					prompt_ref: "safety@prod",
 					model: "deepseek-v4-flash",
 					cases_total: 1,
+					cases_passed: 1,
 					score_avg: 0.9,
 				};
 				return [
@@ -315,6 +345,7 @@ describe("eval runner", () => {
 					prompt_ref: "safety@prod",
 					model: "deepseek-v4-flash",
 					cases_total: 1,
+					cases_passed: 1,
 					score_avg: 0.9,
 				},
 			]),
@@ -339,6 +370,111 @@ describe("eval runner", () => {
 		expect(admin.createRun).toHaveBeenCalledTimes(1);
 	});
 
+	test.each([
+		{
+			name: "accepts an exact 0.05 historical pass-rate drop",
+			candidateFailures: 1,
+			expectedExitCode: 0,
+			expectedCandidatePasses: 19,
+			expectedDrop: 0.050000000000000044,
+		},
+		{
+			name: "rejects a historical pass-rate drop above 0.05",
+			candidateFailures: 2,
+			expectedExitCode: 1,
+			expectedCandidatePasses: 18,
+			expectedDrop: 0.09999999999999998,
+		},
+	] as const)(
+		"$name",
+		async ({
+			candidateFailures,
+			expectedExitCode,
+			expectedCandidatePasses,
+			expectedDrop,
+		}) => {
+			const passRateDataset = {
+				...dataset,
+				defaultTest: { threshold: 0.8 },
+				tests: Array.from({ length: 20 }, (_, index) => ({
+					id: `case-${index}`,
+					description: "historical pass-rate probe",
+					vars: { note: String(index) },
+					assert: [{ type: "equals" as const, value: "safe" }],
+				})),
+			};
+			const gateway = {
+				complete: vi
+					.fn()
+					.mockImplementation(
+						async (call: { vars: Record<string, unknown> }) => ({
+							content:
+								Number(call.vars.note) < candidateFailures ? "blocked" : "safe",
+							costMicroUsd: 1,
+						}),
+					),
+			};
+			const admin = {
+				promptSummaries: vi.fn().mockResolvedValue([
+					{
+						id: 1,
+						slug: "safety",
+						latest_version: 2,
+						labels: [
+							{ label: "candidate", version: 2 },
+							{ label: "prod", version: 1 },
+						],
+					},
+				]),
+				upsertDataset: vi.fn().mockResolvedValue({ id: 4 }),
+				createRun: vi.fn().mockResolvedValue(undefined),
+				historicalRuns: vi.fn().mockResolvedValue([
+					{
+						id: 9,
+						dataset_slug: "safety",
+						dataset_hash: DATASET_HASH,
+						prompt_id: 1,
+						prompt_version: 1,
+						prompt_ref: "safety@prod",
+						model: "deepseek-v4-flash",
+						cases_total: 20,
+						cases_passed: 20,
+						score_avg: null,
+					},
+				]),
+			};
+
+			const result = await runEvaluation(
+				{
+					dataset: "safety",
+					prompt: "safety@candidate",
+					baseline: "prod",
+					baselineFromHistory: true,
+				},
+				{
+					gateway,
+					admin,
+					loadDataset: vi.fn().mockResolvedValue(passRateDataset),
+					gitSha: () => "1234567",
+				},
+			);
+
+			expect(result.exitCode).toBe(expectedExitCode);
+			expect(gateway.complete).toHaveBeenCalledTimes(20);
+			expect(admin.createRun).toHaveBeenCalledTimes(1);
+			expect(admin.createRun).toHaveBeenCalledWith(
+				expect.objectContaining({
+					prompt_ref: "safety@candidate",
+					cases_passed: expectedCandidatePasses,
+					score_avg: null,
+				}),
+			);
+			expect(result.markdown).toContain(
+				`deepseek-v4-flash: baseline pass rate 1; candidate pass rate ${expectedCandidatePasses / 20}; pass-rate drop ${expectedDrop}; maximum allowed 0.05.`,
+			);
+		},
+	);
+
 	test("rejects absent or mismatched baseline history before mutation or provider traffic", async () => {
 		const exactHistory = {
 			id: 9,
@@ -349,6 +485,7 @@ describe("eval runner", () => {
 			prompt_ref: "safety@prod",
 			model: "deepseek-v4-flash",
 			cases_total: 1,
+			cases_passed: 1,
 			score_avg: 0.9,
 		};
 		const histories = [
@@ -439,6 +576,61 @@ describe("eval runner", () => {
 		expect(admin.createRun).not.toHaveBeenCalled();
 		expect(gateway.complete).not.toHaveBeenCalled();
 	});
+
+	test.each([
+		["missing", {}],
+		["negative", { cases_passed: -1 }],
+		["greater than cases_total", { cases_passed: 2 }],
+	] as const)(
+		"rejects %s historical cases_passed before side effects",
+		async (_name, casesPassed) => {
+			const gateway = { complete: vi.fn() };
+			const admin = {
+				promptSummaries: vi.fn().mockResolvedValue([
+					{
+						id: 1,
+						slug: "safety",
+						latest_version: 2,
+						labels: [
+							{ label: "candidate", version: 2 },
+							{ label: "prod", version: 1 },
+						],
+					},
+				]),
+				upsertDataset: vi.fn(),
+				createRun: vi.fn(),
+				historicalRuns: vi.fn().mockResolvedValue([
+					{
+						id: 9,
+						dataset_slug: "safety",
+						dataset_hash: DATASET_HASH,
+						prompt_id: 1,
+						prompt_version: 1,
+						prompt_ref: "safety@prod",
+						model: "deepseek-v4-flash",
+						cases_total: 1,
+						score_avg: null,
+						...casesPassed,
+					},
+				]),
+			};
+
+			await expect(
+				runEvaluation(
+					{
+						dataset: "safety",
+						prompt: "safety@candidate",
+						baseline: "prod",
+						baselineFromHistory: true,
+					},
+					{ gateway, admin, loadDataset: vi.fn().mockResolvedValue(dataset) },
+				),
+			).rejects.toThrow("Historical baseline response was invalid.");
+			expect(admin.upsertDataset).not.toHaveBeenCalled();
+			expect(admin.createRun).not.toHaveBeenCalled();
+			expect(gateway.complete).not.toHaveBeenCalled();
+		},
+	);
 
 	test("requires the exact DeepSeek-only target set before admin or gateway traffic", async () => {
 		const gateway = { complete: vi.fn() };
@@ -574,7 +766,10 @@ describe("eval runner", () => {
 		expect(admin.historicalRuns).not.toHaveBeenCalled();
 		expect(result.markdown).toContain("| case-a | deepseek-v4-flash | pass |");
 		expect(result.markdown).toContain(
-			"Baseline safety@prod and candidate safety@candidate resolved to the same prompt version 1; the candidate ran once and the score drop is zero.",
+			"Baseline safety@prod and candidate safety@candidate resolved to the same prompt version 1; the candidate ran once and the score and pass-rate drops are zero.",
+		);
+		expect(result.markdown).toContain(
+			"deepseek-v4-flash: baseline pass rate 1; candidate pass rate 1; pass-rate drop 0; maximum allowed 0.05.",
 		);
 		expect(result.markdown).toContain(
 			"deepseek-v4-flash: baseline score avg 0.9 over 1 scored cases; candidate score avg 0.9 over 1 scored cases; score drop 0.",
@@ -724,6 +919,202 @@ describe("eval runner", () => {
 		);
 	});
 
+	test.each([
+		{
+			name: "accepts an exact 0.05 paired pass-rate drop",
+			candidateFailures: 1,
+			expectedExitCode: 0,
+			expectedCandidatePasses: 19,
+			expectedDrop: 0.050000000000000044,
+		},
+		{
+			name: "rejects a paired pass-rate drop above 0.05",
+			candidateFailures: 2,
+			expectedExitCode: 1,
+			expectedCandidatePasses: 18,
+			expectedDrop: 0.09999999999999998,
+		},
+	] as const)(
+		"$name",
+		async ({
+			candidateFailures,
+			expectedExitCode,
+			expectedCandidatePasses,
+			expectedDrop,
+		}) => {
+			const passRateDataset = {
+				...dataset,
+				defaultTest: { threshold: 0.8 },
+				tests: Array.from({ length: 20 }, (_, index) => ({
+					id: `case-${index}`,
+					description: "deterministic pass-rate probe",
+					vars: { note: String(index) },
+					assert: [{ type: "equals" as const, value: "safe" }],
+				})),
+			};
+			const gateway = {
+				complete: vi
+					.fn()
+					.mockImplementation(
+						async (call: {
+							prompt: string;
+							vars: Record<string, unknown>;
+						}) => ({
+							content:
+								call.prompt === "safety@2" &&
+								Number(call.vars.note) < candidateFailures
+									? "blocked"
+									: "safe",
+							costMicroUsd: 1,
+						}),
+					),
+			};
+			const admin = {
+				promptSummaries: vi.fn().mockResolvedValue([
+					{
+						id: 1,
+						slug: "safety",
+						latest_version: 2,
+						labels: [
+							{ label: "candidate", version: 2 },
+							{ label: "prod", version: 1 },
+						],
+					},
+				]),
+				upsertDataset: vi.fn().mockResolvedValue({ id: 4 }),
+				createRun: vi.fn().mockResolvedValue(undefined),
+				historicalRuns: vi.fn(),
+			};
+
+			const result = await runEvaluation(
+				{
+					dataset: "safety",
+					prompt: "safety@candidate",
+					baseline: "prod",
+				},
+				{
+					gateway,
+					admin,
+					loadDataset: vi.fn().mockResolvedValue(passRateDataset),
+					gitSha: () => "1234567",
+				},
+			);
+
+			expect(result.exitCode).toBe(expectedExitCode);
+			expect(gateway.complete).toHaveBeenCalledTimes(40);
+			expect(admin.createRun).toHaveBeenCalledTimes(2);
+			expect(admin.createRun.mock.calls.map(([body]) => body)).toEqual([
+				expect.objectContaining({
+					prompt_ref: "safety@prod",
+					cases_passed: 20,
+					score_avg: null,
+				}),
+				expect.objectContaining({
+					prompt_ref: "safety@candidate",
+					cases_passed: expectedCandidatePasses,
+					score_avg: null,
+				}),
+			]);
+			expect(result.markdown).toContain(
+				`deepseek-v4-flash: baseline pass rate 1; candidate pass rate ${expectedCandidatePasses / 20}; pass-rate drop ${expectedDrop}; maximum allowed 0.05.`,
+			);
+		},
+	);
+
+	test("rejects the D1 shape when deterministic failures raise candidate score_avg", async () => {
+		const d1Dataset = {
+			...dataset,
+			defaultTest: { threshold: 0.8 },
+			tests: Array.from({ length: 50 }, (_, index) => ({
+				id: `case-${index}`,
+				description: "D1 deterministic-pruning regression",
+				vars: { note: String(index) },
+				assert: [
+					{ type: "contains" as const, value: "safe" },
+					{ type: "llm-rubric" as const, value: "useful guidance" },
+				],
+			})),
+		};
+		const gateway = {
+			complete: vi
+				.fn()
+				.mockImplementation(
+					async (call: { prompt: string; vars: Record<string, unknown> }) => {
+						if (call.prompt === "judge_rubric_v1@1") {
+							const payload = JSON.parse(String(call.vars.payload)) as {
+								candidate: string;
+							};
+							const index = Number(payload.candidate.split(" ").at(-1));
+							const score = index < 5 ? 0.2 : 0.9;
+							return {
+								content: JSON.stringify({
+									pass: true,
+									score,
+									rationale: "D1 score probe",
+								}),
+								costMicroUsd: 1,
+							};
+						}
+						const index = Number(call.vars.note);
+						return {
+							content:
+								call.prompt === "safety@2" && index < 5
+									? `blocked ${index}`
+									: `safe ${index}`,
+							costMicroUsd: 1,
+						};
+					},
+				),
+		};
+		const admin = {
+			promptSummaries: vi.fn().mockResolvedValue([
+				{
+					id: 1,
+					slug: "safety",
+					latest_version: 2,
+					labels: [
+						{ label: "candidate", version: 2 },
+						{ label: "prod", version: 1 },
+					],
+				},
+			]),
+			upsertDataset: vi.fn().mockResolvedValue({ id: 4 }),
+			createRun: vi.fn().mockResolvedValue(undefined),
+			historicalRuns: vi.fn(),
+		};
+
+		const result = await runEvaluation(
+			{
+				dataset: "safety",
+				prompt: "safety@candidate",
+				baseline: "prod",
+			},
+			{
+				gateway,
+				admin,
+				loadDataset: vi.fn().mockResolvedValue(d1Dataset),
+				gitSha: () => "1234567",
+			},
+		);
+
+		expect(result.exitCode).toBe(1);
+		expect(admin.createRun).toHaveBeenCalledTimes(2);
+		const baselineRun = admin.createRun.mock.calls[0]?.[0] as {
+			cases_passed: number;
+			score_avg: number;
+		};
+		const candidateRun = admin.createRun.mock.calls[1]?.[0] as {
+			cases_passed: number;
+			score_avg: number;
+		};
+		expect(baselineRun.cases_passed).toBe(50);
+		expect(candidateRun.cases_passed).toBe(45);
+		expect(candidateRun.score_avg).toBeGreaterThan(baselineRun.score_avg);
+		expect(result.markdown).toContain(
+			"baseline pass rate 1; candidate pass rate 0.9; pass-rate drop 0.09999999999999998; maximum allowed 0.05.",
+		);
+	});
+
 	test("keeps historical comparison unchanged when history resolves to the candidate version", async () => {
 		const scoredDataset = {
 			...dataset,
@@ -769,6 +1160,7 @@ describe("eval runner", () => {
 					prompt_ref: "safety@prod",
 					model: "deepseek-v4-flash",
 					cases_total: 1,
+					cases_passed: 1,
 					score_avg: 0.9,
 				},
 			]),

@@ -28,6 +28,7 @@ export interface EvalRunnerOptions {
 	baseline?: string;
 	baselineFromHistory?: boolean;
 	allowCache?: boolean;
+	maxPassRateDrop?: number;
 	maxScoreDrop?: number;
 	minRequestIntervalMs?: number;
 	gitSha?: string;
@@ -64,6 +65,7 @@ interface ModelResult {
 	costMicroUsd: number;
 	durationMs: number;
 }
+const DEFAULT_MAX_PASS_RATE_DROP = 0.05;
 const HistoricalRunsSchema = z.array(
 	z
 		.object({
@@ -75,6 +77,7 @@ const HistoricalRunsSchema = z.array(
 			prompt_version: z.number().int().positive().safe(),
 			prompt_ref: z.string().min(1),
 			cases_total: z.number().int().positive().safe(),
+			cases_passed: z.number().int().nonnegative().safe(),
 			score_avg: z.number().finite().min(0).max(1).nullable(),
 		})
 		.passthrough(),
@@ -150,6 +153,14 @@ function comparisonLine(
 	const side = (label: string, run: ModelResult) =>
 		`${label} score avg ${run.scoreAvg ?? "none"} over ${scoredCases(run)} scored cases`;
 	return `${candidateRun.model}: ${side("baseline", baselineRun)}; ${side("candidate", candidateRun)}; score drop ${drop ?? "unavailable"}.`;
+}
+function passRateComparisonLine(
+	model: string,
+	baselinePassRate: number,
+	candidatePassRate: number,
+	maximumAllowedDrop: number,
+): string {
+	return `${model}: baseline pass rate ${baselinePassRate}; candidate pass rate ${candidatePassRate}; pass-rate drop ${baselinePassRate - candidatePassRate}; maximum allowed ${maximumAllowedDrop}.`;
 }
 function markdown(results: readonly ModelResult[]): string {
 	return [
@@ -242,26 +253,26 @@ function requestInterval(options: EvalRunnerOptions): number {
 }
 
 /**
- * Rejects only score drops materially above the configured boundary.
+ * Rejects only scalar drops materially above the configured boundary.
  *
- * Decimal scores such as 0.9 and 0.85 are not exactly representable in
+ * Decimal metrics such as 0.9 and 0.85 are not exactly representable in
  * binary floating point, so their mathematically exact 0.05 difference can
  * evaluate to 0.050000000000000044. One scale-adjusted machine epsilon
  * admits only that scalar comparison roundoff.
  */
-function scoreDropExceeds(
-	baselineScore: number,
-	candidateScore: number,
+function dropExceeds(
+	baselineValue: number,
+	candidateValue: number,
 	maximumAllowedDrop: number,
 ): boolean {
-	const scoreDrop = baselineScore - candidateScore;
+	const drop = baselineValue - candidateValue;
 	const scale = Math.max(
 		1,
-		Math.abs(baselineScore),
-		Math.abs(candidateScore),
+		Math.abs(baselineValue),
+		Math.abs(candidateValue),
 		Math.abs(maximumAllowedDrop),
 	);
-	return scoreDrop > maximumAllowedDrop + Number.EPSILON * scale;
+	return drop > maximumAllowedDrop + Number.EPSILON * scale;
 }
 
 export async function runEvaluation(
@@ -269,8 +280,17 @@ export async function runEvaluation(
 	deps: EvalRunDependencies,
 ): Promise<{ exitCode: 0 | 1; markdown: string; warnings: readonly string[] }> {
 	const minRequestIntervalMs = requestInterval(options);
+	const maxPassRateDrop = options.maxPassRateDrop ?? DEFAULT_MAX_PASS_RATE_DROP;
 	if (options.baselineFromHistory && options.baseline === undefined)
 		throw new EvalRunError("--baseline-from-history requires --baseline.");
+	if (
+		!Number.isFinite(maxPassRateDrop) ||
+		maxPassRateDrop < 0 ||
+		maxPassRateDrop > 1
+	)
+		throw new EvalRunError(
+			"max-pass-rate-drop must be a finite number between 0 and 1.",
+		);
 	if (
 		!Number.isFinite(options.maxScoreDrop ?? 0.05) ||
 		(options.maxScoreDrop ?? 0.05) < 0 ||
@@ -316,7 +336,10 @@ export async function runEvaluation(
 		!options.baselineFromHistory &&
 		baseline.id === candidate.id &&
 		baseline.version === candidate.version;
-	const historyScores = new Map<string, number | null>();
+	const historyMetrics = new Map<
+		string,
+		{ passRate: number; scoreAvg: number | null }
+	>();
 	if (options.baselineFromHistory && baseline) {
 		for (const model of dataset.providers) {
 			const history = HistoricalRunsSchema.safeParse(
@@ -328,7 +351,10 @@ export async function runEvaluation(
 					}),
 				),
 			);
-			if (!history.success)
+			if (
+				!history.success ||
+				history.data.some((run) => run.cases_passed > run.cases_total)
+			)
 				throw new EvalRunError("Historical baseline response was invalid.");
 			const match = history.data.find(
 				(run) =>
@@ -341,7 +367,10 @@ export async function runEvaluation(
 					run.cases_total === dataset.tests.length,
 			);
 			if (!match) throw new EvalRunError("Historical baseline is missing.");
-			historyScores.set(model, match.score_avg);
+			historyMetrics.set(model, {
+				passRate: match.cases_passed / match.cases_total,
+				scoreAvg: match.score_avg,
+			});
 		}
 	}
 	const datasetRow = await deps.admin.upsertDataset({
@@ -421,10 +450,19 @@ export async function runEvaluation(
 	const summary: string[] = [];
 	if (baseline && samePairedVersion) {
 		summary.push(
-			`Baseline ${baseline.ref} and candidate ${candidate.ref} resolved to the same prompt version ${candidate.version}; the candidate ran once and the score drop is zero.`,
+			`Baseline ${baseline.ref} and candidate ${candidate.ref} resolved to the same prompt version ${candidate.version}; the candidate ran once and the score and pass-rate drops are zero.`,
 		);
-		for (const candidateRun of candidateRuns)
+		for (const candidateRun of candidateRuns) {
+			summary.push(
+				passRateComparisonLine(
+					candidateRun.model,
+					candidateRun.passRate,
+					candidateRun.passRate,
+					maxPassRateDrop,
+				),
+			);
 			summary.push(comparisonLine(candidateRun, candidateRun, 0));
+		}
 	}
 	if (baseline && !options.baselineFromHistory && !samePairedVersion)
 		for (const candidateRun of candidateRuns) {
@@ -434,6 +472,14 @@ export async function runEvaluation(
 			if (!baselineRun)
 				throw new EvalRunError("Paired baseline is incomplete.");
 			if (
+				dropExceeds(
+					baselineRun.passRate,
+					candidateRun.passRate,
+					maxPassRateDrop,
+				)
+			)
+				qualityFail = true;
+			if (
 				baselineRun.scoreAvg !== undefined &&
 				candidateRun.scoreAvg === undefined
 			)
@@ -441,32 +487,57 @@ export async function runEvaluation(
 			if (
 				candidateRun.scoreAvg !== undefined &&
 				baselineRun.scoreAvg !== undefined &&
-				scoreDropExceeds(
+				dropExceeds(
 					baselineRun.scoreAvg,
 					candidateRun.scoreAvg,
 					options.maxScoreDrop ?? 0.05,
 				)
 			)
 				qualityFail = true;
+			summary.push(
+				passRateComparisonLine(
+					candidateRun.model,
+					baselineRun.passRate,
+					candidateRun.passRate,
+					maxPassRateDrop,
+				),
+			);
 			summary.push(comparisonLine(baselineRun, candidateRun));
 		}
 	if (options.baselineFromHistory) {
 		for (const candidateRun of candidateRuns) {
-			const baselineScore = historyScores.get(candidateRun.model);
-			if (baselineScore === undefined)
+			const baselineMetrics = historyMetrics.get(candidateRun.model);
+			if (baselineMetrics === undefined)
 				throw new EvalRunError("Historical baseline is missing.");
+			if (
+				dropExceeds(
+					baselineMetrics.passRate,
+					candidateRun.passRate,
+					maxPassRateDrop,
+				)
+			)
+				qualityFail = true;
+			const baselineScore = baselineMetrics.scoreAvg;
 			if (baselineScore !== null && candidateRun.scoreAvg === undefined)
 				qualityFail = true;
 			if (
 				baselineScore !== null &&
 				candidateRun.scoreAvg !== undefined &&
-				scoreDropExceeds(
+				dropExceeds(
 					baselineScore,
 					candidateRun.scoreAvg,
 					options.maxScoreDrop ?? 0.05,
 				)
 			)
 				qualityFail = true;
+			summary.push(
+				passRateComparisonLine(
+					candidateRun.model,
+					baselineMetrics.passRate,
+					candidateRun.passRate,
+					maxPassRateDrop,
+				),
+			);
 		}
 	}
 	return {

@@ -2,15 +2,17 @@
 
 Date: 2026-07-30
 
-Status: **verify complete — awaiting explicit human Phase 6 approval**. Both
+Status: **done — explicitly human-approved on 2026-07-30**. Both
 Verify arms concluded with the required results: the disposable no-op PR #5
 returned a green live pair with process exit 0, and the disposable
 deterministic negative-control PR #6 returned a red aggregate `eval-gate` with
 process exit 1 whose log names every failing case, beside a green `ci`.
 Neither Verify PR was merged; both disposable remote branches are deleted.
-Defect D1 (the certified-degraded control gap) is recorded with its remedy
-deferred to the owner. No technical blocker remains — the only gate is
-explicit human Phase 6 approval. Phase 7 has not started.
+Evidence PR #7 was merged separately as `bcca560`. Defect D1 (the
+certified-degraded control gap) remains part of this evidence; after approving
+Phase 6, the owner selected Remedy A with a 0.05 baseline-to-candidate
+pass-rate drop limit. That post-phase correction is carried separately without
+changing or rerunning this evidence. Phase 7 has not started.
 
 ## Provenance
 
@@ -114,12 +116,13 @@ only `score_avg`, whose denominator excludes deterministically failed cases
 (deterministic assertions short-circuit without a score), and pass rate is
 checked only against the absolute 0.8 floor with no baseline comparison. A
 candidate can therefore break deterministic behavior, *raise* its own
-`score_avg` by pruning its worst cases from the scored set, and pass. The
-remedy (a pass-rate drop band versus scoring deterministic failures as zero)
-is an owner choice deferred until after Phase 6; see the 2026-07-30 D1
-decision-log row in `PROGRESS.md`. Live v2 runs scored 42/50 (0.84, Phase 5)
-and 45/50 (0.90, this run) and never tripped the 0.8 pass-rate floor, so
-certified degraded v2 is retired as the Phase 6 negative control.
+`score_avg` by pruning its worst cases from the scored set, and pass. After
+Phase 6 completion, the owner selected Remedy A: compare baseline and
+candidate pass rates with a 0.05 maximum drop while leaving deterministic
+failures unscored by the rubric; see the superseding 2026-07-30 decision-log
+row in `PROGRESS.md`. Live v2 runs scored 42/50 (0.84, Phase 5) and 45/50
+(0.90, this run) and never tripped the 0.8 pass-rate floor, so certified
+degraded v2 is retired as the Phase 6 negative control.
 
 ![PR #6 first-attempt run summary: all jobs green despite five deterministic
 failures; score drop -0.015999999999999792; process exit
@@ -242,13 +245,13 @@ fails the check; the failure message names the failing cases."*
 
 ## Discrepancies and known deviations
 
-- **Defect D1** (recorded, remedy deferred): the certified degraded v2
+- **Defect D1** (recorded; Remedy A selected after Phase 6): the certified degraded v2
   passed the live gate twice (0.84, 0.90) because deterministic failures
   prune scored cases and *raise* `score_avg` while pass rate is only checked
   against the absolute floor. The deterministic v3 control does not depend on
-  the score-drop arm, so Phase 6 Verify completed without the remedy; the
-  owner must later choose between a pass-rate drop band and scoring
-  deterministic failures as zero.
+  the score-drop arm, so Phase 6 Verify completed without the remedy. The
+  owner subsequently approved a separate 0.05 pass-rate drop comparison,
+  preserving `score_avg` as the judge-only metric.
 - **Live 14/50 versus predicted compliant 16/50**: explained above; two
   expected-`none` rubric failures at 0.08 and 0.25 moved the result further
   red. Not a falsification (boundary ≥40/50); no rerun occurred.
@@ -274,8 +277,9 @@ fails the check; the failure message names the failing cases."*
   `ci-seed.test.ts` are unchanged, and `negative-control.test.ts` does not
   exist on master. Commits `3663220` and `28e4d6a` remain retrievable through
   closed PR #6 on GitHub.
-- Neither Verify PR was merged; protected `master` remains
-  `2e82f2567afdebff30caced108b7de2867e0aa41`.
+- Neither Verify PR was merged. The separate docs/evidence PR #7 merged
+  `c977f77e02e256dd7824aa21a4473b7ec8b0e1fd` as protected `master`
+  `bcca560c36222dffa89d7944e0ca7239e05af499`.
 
 ## Evidence artifacts
 
@@ -293,7 +297,8 @@ Key identifiers:
 
 | Item | Value |
 |---|---|
-| Protected `master` | `2e82f2567afdebff30caced108b7de2867e0aa41` (`2e82f25`) |
+| Protected `master` after evidence PR #7 | `bcca560c36222dffa89d7944e0ca7239e05af499` (`bcca560`) |
+| Evidence PR #7 head / merge | `c977f77e02e256dd7824aa21a4473b7ec8b0e1fd` / `bcca560` |
 | PR #5 head / run | `4d80296f99c025d2340939236c000c6e378e9291` / `30521540051` |
 | PR #4 head / run / merge | `7e8c91d4b7120016817b4cc9b96177ba0efbc7c1` / `30520586222` / `2e82f25` |
 | PR #6 v2 head / run | `36632201edc675ff688d521d4f99c4b6b7f508c9` / `30522521709` |
@@ -302,5 +307,6 @@ Key identifiers:
 | v3 fixture digest | `b4191e04e77a0a2e0978c08dda03b202de018e1d35fccf51a8411faad5875004` (`NEGATIVE_CONTROL_DIGEST`) |
 | Certified digests (unchanged) | v1 `f8da4cd3…`, v2 `4f9969b7…` |
 
-Phase 6 is **not** marked done: this record awaits explicit human Phase 6
-approval, per the phase-completion gate. Phase 7 has not started.
+Phase 6 is **done and human-approved** as of 2026-07-30. The approved D1
+Remedy A is post-phase corrective work and does not alter the Verify outcome
+recorded here. Phase 7 has not started.
