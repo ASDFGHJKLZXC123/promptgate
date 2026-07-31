@@ -423,6 +423,23 @@ function sendCacheHit(
 		return reply.send(Readable.from(cacheReplayFrames(hit)));
 	}
 
+	// A large buffered cache hit can still be reset before Node flushes every
+	// byte. Fastify may skip onResponse in that case, so retain the same durable
+	// fallback and exactly-once budget reconciliation used by live abort paths.
+	const onBufferedCacheFinish = (): void => {
+		reply.raw.off("close", onBufferedCacheClose);
+	};
+	const onBufferedCacheClose = (): void => {
+		reply.raw.off("finish", onBufferedCacheFinish);
+		if (!reply.raw.writableFinished) {
+			log.status = "client_aborted";
+			log.errorCode = null;
+			void logRequest(db, request, now, budgetGuard);
+		}
+	};
+	reply.raw.once("finish", onBufferedCacheFinish);
+	reply.raw.once("close", onBufferedCacheClose);
+
 	return reply.send(hit.response);
 }
 
@@ -691,8 +708,15 @@ async function handleStreamingRequest(
 ): Promise<FastifyReply> {
 	const controller = new AbortController();
 	let clientAborted = false;
+	let responseClosed = false;
+	let fallbackLogReady = false;
+	let preHeaderCauseSettled = false;
 	const abortForClientDisconnect = (): void => {
-		if (!clientAborted && !controller.signal.aborted) {
+		if (
+			!preHeaderCauseSettled &&
+			!clientAborted &&
+			!controller.signal.aborted
+		) {
 			clientAborted = true;
 			controller.abort(new Error("Client disconnected"));
 		}
@@ -707,15 +731,25 @@ async function handleStreamingRequest(
 	};
 	const onResponseClose = (): void => {
 		if (!reply.raw.writableFinished) {
+			responseClosed = true;
 			abortForClientDisconnect();
+			if (fallbackLogReady) {
+				void logRequest(db, request, now, budgetGuard);
+			}
 		}
+		cleanup();
+	};
+	const onResponseFinish = (): void => {
+		cleanup();
 	};
 	const cleanup = (): void => {
 		request.raw.off("close", onRequestClose);
 		reply.raw.off("close", onResponseClose);
+		reply.raw.off("finish", onResponseFinish);
 	};
 	request.raw.on("close", onRequestClose);
 	reply.raw.on("close", onResponseClose);
+	reply.raw.on("finish", onResponseFinish);
 	const timeout = setTimeout(() => {
 		if (!controller.signal.aborted) {
 			controller.abort(new Error("Upstream request timed out"));
@@ -732,7 +766,10 @@ async function handleStreamingRequest(
 		firstResult = await iterator.next();
 	} catch (error) {
 		clearTimeout(timeout);
-		cleanup();
+		const failureWasClientAbort = clientAborted;
+		const failureWasTimeout =
+			!failureWasClientAbort && controller.signal.aborted;
+		preHeaderCauseSettled = true;
 		try {
 			await iterator?.return?.();
 		} catch (returnError) {
@@ -743,17 +780,38 @@ async function handleStreamingRequest(
 				"Failed to close upstream stream after a pre-header failure",
 			);
 		}
-		if (clientAborted) {
+		if (failureWasClientAbort) {
 			applyStreamMeter(db, log, body, undefined, 0);
 			log.status = "client_aborted";
 			log.errorCode = null;
 			void logRequest(db, request, now, budgetGuard);
+			cleanup();
 			return reply;
 		}
+		if (responseClosed) {
+			// The upstream failure or timeout won before the client closed. Fastify
+			// may skip onResponse for the dead socket, so preserve that first-cause
+			// row and release its reservation here.
+			if (failureWasTimeout) {
+				log.status = "provider_error";
+				log.errorCode = "provider_error";
+			} else if (error instanceof ProviderRequestError) {
+				log.status = "rejected_validation";
+				log.errorCode = "invalid_request_error";
+			} else {
+				log.status = "provider_error";
+				log.errorCode = "provider_error";
+			}
+			await logRequest(db, request, now, budgetGuard);
+			cleanup();
+			return reply;
+		}
+		fallbackLogReady = true;
 		return sendStreamStartError(reply, log, provider, error, controller.signal);
 	}
 	if (clientAborted) {
 		clearTimeout(timeout);
+		preHeaderCauseSettled = true;
 		cleanup();
 		try {
 			await iterator.return?.();
@@ -769,6 +827,34 @@ async function handleStreamingRequest(
 		log.errorCode = null;
 		void logRequest(db, request, now, budgetGuard);
 		return reply;
+	}
+	if (controller.signal.aborted) {
+		clearTimeout(timeout);
+		preHeaderCauseSettled = true;
+		try {
+			await iterator.return?.();
+		} catch (error) {
+			const failureType = error instanceof Error ? error.name : "UnknownError";
+			request.log.warn(
+				{ provider, requestId: log.requestId, failureType },
+				"Failed to close upstream stream after a pre-header timeout",
+			);
+		}
+		log.status = "provider_error";
+		log.errorCode = "provider_error";
+		fallbackLogReady = true;
+		if (responseClosed) {
+			await logRequest(db, request, now, budgetGuard);
+			cleanup();
+			return reply;
+		}
+		return sendError(
+			reply,
+			504,
+			`Upstream ${provider} request timed out.`,
+			"provider_error",
+			"server_error",
+		);
 	}
 
 	// The fetch succeeded and the first frame is in hand: committed to a
@@ -1043,8 +1129,64 @@ export function registerChatCompletionsRoute(
 			}
 
 			const controller = new AbortController();
+			let clientAborted = false;
+			let responseClosed = false;
+			let fallbackLogReady = false;
+			let failureCauseSettled = false;
+			const abortForClientDisconnect = (): void => {
+				// Preserve a timeout or provider/validation failure once it wins so a
+				// later socket close cannot relabel the settled first cause.
+				if (failureCauseSettled || clientAborted || controller.signal.aborted) {
+					return;
+				}
+				clientAborted = true;
+				log.status = "client_aborted";
+				log.errorCode = null;
+				if (!controller.signal.aborted) {
+					controller.abort(new Error("Client disconnected"));
+				}
+			};
+			// A fully received POST does not set request.raw.aborted when its client
+			// disappears while the buffered provider call is pending. Observe the
+			// response socket as well, matching the streaming transport boundary.
+			const onRequestClose = (): void => {
+				if (request.raw.aborted) {
+					abortForClientDisconnect();
+				}
+			};
+			const onResponseClose = (): void => {
+				if (!reply.raw.writableFinished) {
+					responseClosed = true;
+					abortForClientDisconnect();
+					if (fallbackLogReady) {
+						void logRequest(db, request, now, budgetGuard);
+					}
+				}
+				cleanupClientDisconnect();
+			};
+			const onResponseFinish = (): void => {
+				cleanupClientDisconnect();
+			};
+			const cleanupClientDisconnect = (): void => {
+				request.raw.off("close", onRequestClose);
+				reply.raw.off("close", onResponseClose);
+				reply.raw.off("finish", onResponseFinish);
+			};
+			const logIfResponseClosed = async (): Promise<boolean> => {
+				if (!responseClosed) {
+					return false;
+				}
+				await logRequest(db, request, now, budgetGuard);
+				cleanupClientDisconnect();
+				return true;
+			};
+			request.raw.on("close", onRequestClose);
+			reply.raw.on("close", onResponseClose);
+			reply.raw.on("finish", onResponseFinish);
 			const timeout = setTimeout(() => {
-				controller.abort(new Error("Upstream request timed out"));
+				if (!controller.signal.aborted) {
+					controller.abort(new Error("Upstream request timed out"));
+				}
 			}, config.UPSTREAM_TIMEOUT_MS);
 
 			let response: ChatResponse;
@@ -1054,9 +1196,25 @@ export function registerChatCompletionsRoute(
 					controller.signal,
 				);
 			} catch (error) {
+				if (clientAborted) {
+					// No buffered completion bytes reached the caller. Reuse the existing
+					// aborted-usage rule: estimate prompt input and zero visible output.
+					applyStreamMeter(db, log, body, undefined, 0);
+					fallbackLogReady = true;
+					log.status = "client_aborted";
+					log.errorCode = null;
+					await logRequest(db, request, now, budgetGuard);
+					cleanupClientDisconnect();
+					return reply;
+				}
 				if (controller.signal.aborted) {
+					failureCauseSettled = true;
 					log.status = "provider_error";
 					log.errorCode = "provider_error";
+					fallbackLogReady = true;
+					if (await logIfResponseClosed()) {
+						return reply;
+					}
 					return sendError(
 						reply,
 						504,
@@ -1070,9 +1228,21 @@ export function registerChatCompletionsRoute(
 				// step 2) — a caller error, not an upstream failure. Surface it as a
 				// 400 with the adapter's client-safe message, never as provider_error.
 				if (error instanceof ProviderRequestError) {
+					failureCauseSettled = true;
 					log.status = "rejected_validation";
 					log.errorCode = "invalid_request_error";
+					fallbackLogReady = true;
+					if (await logIfResponseClosed()) {
+						return reply;
+					}
 					return sendError(reply, 400, error.message, "invalid_request_error");
+				}
+				failureCauseSettled = true;
+				log.status = "provider_error";
+				log.errorCode = "provider_error";
+				fallbackLogReady = true;
+				if (await logIfResponseClosed()) {
+					return reply;
 				}
 				return sendProviderError(reply, log, routing.provider, error);
 			} finally {
@@ -1084,7 +1254,9 @@ export function registerChatCompletionsRoute(
 			log.outputTokens = meter.outputTokens;
 			log.costMicroUsd = meter.costMicroUsd;
 			log.costEstimated = meter.costEstimated;
-			log.status = "ok";
+			fallbackLogReady = true;
+			log.status = clientAborted ? "client_aborted" : "ok";
+			log.errorCode = null;
 			if (body.pg_no_cache !== true) {
 				try {
 					upsertCacheEntry(db, {
@@ -1108,6 +1280,13 @@ export function registerChatCompletionsRoute(
 						"Failed to cache completed response",
 					);
 				}
+			}
+			if (clientAborted) {
+				// An adapter may settle concurrently with cancellation. Preserve its
+				// exact metering/cache result, but never write it to the closed client.
+				await logRequest(db, request, now, budgetGuard);
+				cleanupClientDisconnect();
+				return reply;
 			}
 
 			reply.header(

@@ -50,11 +50,13 @@ const UUID_RE =
 
 let previousDbPath: string | undefined;
 let previousAdminToken: string | undefined;
+let previousUpstreamTimeout: string | undefined;
 let tempDbDir: string | undefined;
 
 beforeEach(async () => {
 	previousDbPath = process.env.DB_PATH;
 	previousAdminToken = process.env.ADMIN_TOKEN;
+	previousUpstreamTimeout = process.env.UPSTREAM_TIMEOUT_MS;
 	process.env.ADMIN_TOKEN = ADMIN_TOKEN;
 	tempDbDir = mkdtempSync(join(tmpdir(), "promptgate-stream-test-"));
 	process.env.DB_PATH = join(tempDbDir, "promptgate.db");
@@ -71,6 +73,11 @@ afterEach(() => {
 		delete process.env.ADMIN_TOKEN;
 	} else {
 		process.env.ADMIN_TOKEN = previousAdminToken;
+	}
+	if (previousUpstreamTimeout === undefined) {
+		delete process.env.UPSTREAM_TIMEOUT_MS;
+	} else {
+		process.env.UPSTREAM_TIMEOUT_MS = previousUpstreamTimeout;
 	}
 	if (tempDbDir) {
 		rmSync(tempDbDir, { recursive: true, force: true });
@@ -386,6 +393,855 @@ async function readRow(
 	}
 	throw new Error(`requests row for ${requestId} was not persisted in time`);
 }
+
+async function readOnlyRowForModel(
+	db: Database.Database,
+	model: string,
+): Promise<RequestsRow> {
+	for (let attempt = 0; attempt < 400; attempt++) {
+		const rows = db
+			.prepare("SELECT * FROM requests WHERE model = ? ORDER BY id ASC")
+			.all(model) as RequestsRow[];
+		if (rows.length === 1) {
+			return rows[0] as RequestsRow;
+		}
+		if (rows.length > 1) {
+			throw new Error(`more than one requests row was persisted for ${model}`);
+		}
+		await new Promise((resolve) => setTimeout(resolve, 5));
+	}
+	throw new Error(`requests row for ${model} was not persisted in time`);
+}
+
+interface BufferedResponseGate {
+	closed: Promise<void>;
+	release: () => void;
+}
+
+function installBufferedResponseGate(
+	server: FastifyInstance,
+): BufferedResponseGate[] {
+	const gates: BufferedResponseGate[] = [];
+	server.addHook("onSend", async (request, reply, payload) => {
+		if (request.headers["x-test-gate-buffered-response"] !== "1") {
+			return payload;
+		}
+		if (payload instanceof Readable) {
+			throw new Error("expected a buffered response payload");
+		}
+		const bytes = Buffer.isBuffer(payload)
+			? payload
+			: Buffer.from(String(payload), "utf8");
+		let releaseResponse: (() => void) | undefined;
+		const released = new Promise<void>((resolve) => {
+			releaseResponse = resolve;
+		});
+		let didRelease = false;
+		const gate: BufferedResponseGate = {
+			closed: new Promise((resolve) => reply.raw.once("close", resolve)),
+			release: () => {
+				if (!didRelease) {
+					didRelease = true;
+					releaseResponse?.();
+				}
+			},
+		};
+		gates.push(gate);
+		reply.removeHeader("content-length");
+		return Readable.from(
+			(async function* gateResponse() {
+				yield bytes.subarray(0, 1);
+				await released;
+				yield bytes.subarray(1);
+			})(),
+		);
+	});
+	return gates;
+}
+
+async function resetGatedBufferedResponse(
+	address: string,
+	body: string,
+	gates: BufferedResponseGate[],
+): Promise<{ requestId: string; release: () => void }> {
+	return await new Promise((resolve, reject) => {
+		const client = httpRequest(
+			`${address}/v1/chat/completions`,
+			{
+				method: "POST",
+				headers: {
+					...authHeaders(),
+					"content-length": Buffer.byteLength(body),
+					"x-test-gate-buffered-response": "1",
+				},
+			},
+			(response) => {
+				const requestId = response.headers["x-pg-request-id"];
+				if (typeof requestId !== "string") {
+					reject(new Error("missing request id"));
+					return;
+				}
+				response.once("data", () => {
+					const gate = gates.shift();
+					if (!gate) {
+						reject(new Error("buffered response gate was not installed"));
+						return;
+					}
+					client.destroy();
+					void gate.closed.then(
+						() => resolve({ requestId, release: gate.release }),
+						reject,
+					);
+				});
+			},
+		);
+		client.on("error", (error: Error) => {
+			if (error.message !== "socket hang up") {
+				reject(error);
+			}
+		});
+		client.end(body);
+	});
+}
+
+describe("POST /v1/chat/completions — non-streaming client abort", () => {
+	test("aborts a pending upstream after a complete loopback POST, logs once, and reconciles its reservation", async () => {
+		const db = openTestDb();
+		seedApiKey(db, { budgetMicroUsdMonth: 6 });
+		seedPricing(db, "gpt-nonstream-abort", 1_000_000, 2_000_000);
+		let completeCalls = 0;
+		let markFirstStarted: (() => void) | undefined;
+		let rejectFirst: ((reason?: unknown) => void) | undefined;
+		let markFirstAborted: (() => void) | undefined;
+		const firstStarted = new Promise<void>((resolve) => {
+			markFirstStarted = resolve;
+		});
+		const firstAborted = new Promise<void>((resolve) => {
+			markFirstAborted = resolve;
+		});
+		const adapter: ProviderAdapter = {
+			name: "openai",
+			async complete(
+				_req: ChatRequest,
+				signal: AbortSignal,
+			): Promise<ChatResponse> {
+				completeCalls += 1;
+				if (completeCalls === 1) {
+					markFirstStarted?.();
+					return new Promise<ChatResponse>((_resolve, reject) => {
+						rejectFirst = reject;
+						signal.addEventListener(
+							"abort",
+							() => {
+								markFirstAborted?.();
+								reject(signal.reason);
+							},
+							{ once: true },
+						);
+					});
+				}
+				return {
+					id: "chatcmpl-after-abort",
+					object: "chat.completion",
+					created: 0,
+					model: "gpt-nonstream-abort",
+					choices: [
+						{
+							index: 0,
+							message: { role: "assistant", content: "ok" },
+							finish_reason: "stop",
+						},
+					],
+					usage: {
+						prompt_tokens: 1,
+						completion_tokens: 1,
+						total_tokens: 2,
+					},
+				};
+			},
+			stream(): AsyncIterable<SseChunk> {
+				throw new Error("unused");
+			},
+		};
+		const server = await buildTestServer({ openai: adapter });
+		const address = await server.listen({ port: 0, host: "127.0.0.1" });
+		const body = JSON.stringify({
+			model: "gpt-nonstream-abort",
+			messages: [{ role: "user", content: "12345678" }],
+			max_tokens: 1,
+			pg_no_cache: true,
+		});
+
+		try {
+			let responseStarted = false;
+			const client = httpRequest(
+				`${address}/v1/chat/completions`,
+				{
+					method: "POST",
+					headers: {
+						...authHeaders(),
+						"content-length": Buffer.byteLength(body),
+					},
+				},
+				(response) => {
+					responseStarted = true;
+					response.destroy();
+				},
+			);
+			client.on("error", () => undefined);
+			client.end(body);
+			await firstStarted;
+			client.destroy();
+
+			const abortObserved = await Promise.race([
+				firstAborted.then(() => true),
+				new Promise<false>((resolve) => setTimeout(() => resolve(false), 500)),
+			]);
+			expect(abortObserved).toBe(true);
+			expect(responseStarted).toBe(false);
+
+			const row = await readOnlyRowForModel(db, "gpt-nonstream-abort");
+			expect(row.streamed).toBe(0);
+			expect(row.status).toBe("client_aborted");
+			expect(row.error_code).toBeNull();
+			expect(row.input_tokens).toBe(2);
+			expect(row.output_tokens).toBe(0);
+			expect(row.cost_micro_usd).toBe(2);
+			expect(row.cost_estimated).toBe(1);
+			expect(
+				db.prepare("SELECT count(*) AS count FROM cache_entries").get(),
+			).toEqual({ count: 0 });
+			await new Promise((resolve) => setTimeout(resolve, 20));
+			expect(
+				db
+					.prepare("SELECT count(*) AS count FROM requests WHERE model = ?")
+					.get("gpt-nonstream-abort"),
+			).toEqual({ count: 1 });
+
+			// The first reservation was released only after its durable estimated-cost
+			// row. With a $0.000006 cap, a leaked reservation would reject this call.
+			const afterAbort = await server.inject({
+				method: "POST",
+				url: "/v1/chat/completions",
+				headers: authHeaders(),
+				body,
+			});
+			expect(afterAbort.statusCode).toBe(200);
+			expect(completeCalls).toBe(2);
+		} finally {
+			rejectFirst?.(new Error("test cleanup"));
+			await server.close();
+			db.close();
+		}
+	});
+
+	test("keeps timeout as the first cause when the client disconnects before the adapter rejects", async () => {
+		process.env.UPSTREAM_TIMEOUT_MS = "20";
+		await vi.resetModules();
+		const db = openTestDb();
+		seedApiKey(db, { budgetMicroUsdMonth: 3 });
+		seedPricing(db, "gpt-timeout-before-reset", 1_000_000, 2_000_000);
+		let completeCalls = 0;
+		let markFirstStarted: (() => void) | undefined;
+		let markTimeoutAbort: (() => void) | undefined;
+		let rejectTimedOutCall: (() => void) | undefined;
+		const firstStarted = new Promise<void>((resolve) => {
+			markFirstStarted = resolve;
+		});
+		const timeoutAbort = new Promise<void>((resolve) => {
+			markTimeoutAbort = resolve;
+		});
+		const adapter: ProviderAdapter = {
+			name: "openai",
+			async complete(
+				_req: ChatRequest,
+				signal: AbortSignal,
+			): Promise<ChatResponse> {
+				completeCalls += 1;
+				if (completeCalls === 1) {
+					markFirstStarted?.();
+					return new Promise<ChatResponse>((_resolve, reject) => {
+						signal.addEventListener(
+							"abort",
+							() => {
+								markTimeoutAbort?.();
+								rejectTimedOutCall = () => reject(signal.reason);
+							},
+							{ once: true },
+						);
+					});
+				}
+				return {
+					id: "chatcmpl-after-timeout-reset",
+					object: "chat.completion",
+					created: 0,
+					model: "gpt-timeout-before-reset",
+					choices: [
+						{
+							index: 0,
+							message: { role: "assistant", content: "ok" },
+							finish_reason: "stop",
+						},
+					],
+					usage: {
+						prompt_tokens: 1,
+						completion_tokens: 1,
+						total_tokens: 2,
+					},
+				};
+			},
+			stream(): AsyncIterable<SseChunk> {
+				throw new Error("unused");
+			},
+		};
+		const server = await buildTestServer({ openai: adapter });
+		const address = await server.listen({ port: 0, host: "127.0.0.1" });
+		const body = JSON.stringify({
+			model: "gpt-timeout-before-reset",
+			messages: [{ role: "user", content: "abcd" }],
+			max_tokens: 1,
+			pg_no_cache: true,
+		});
+
+		try {
+			let responseStarted = false;
+			const client = httpRequest(
+				`${address}/v1/chat/completions`,
+				{
+					method: "POST",
+					headers: {
+						...authHeaders(),
+						"content-length": Buffer.byteLength(body),
+					},
+				},
+				(response) => {
+					responseStarted = true;
+					response.destroy();
+				},
+			);
+			client.on("error", () => undefined);
+			client.end(body);
+			await firstStarted;
+			await timeoutAbort;
+			client.destroy();
+			await new Promise((resolve) => setTimeout(resolve, 10));
+			rejectTimedOutCall?.();
+
+			const row = await readOnlyRowForModel(db, "gpt-timeout-before-reset");
+			expect(responseStarted).toBe(false);
+			expect(row).toMatchObject({
+				streamed: 0,
+				cache_hit: 0,
+				status: "provider_error",
+				error_code: "provider_error",
+				input_tokens: null,
+				output_tokens: null,
+				cost_micro_usd: null,
+			});
+			await new Promise((resolve) => setTimeout(resolve, 20));
+			expect(
+				db
+					.prepare("SELECT COUNT(*) AS count FROM requests WHERE model = ?")
+					.get("gpt-timeout-before-reset"),
+			).toEqual({ count: 1 });
+
+			// A leaked three-micro-USD timeout reservation would reject this call.
+			const afterTimeout = await server.inject({
+				method: "POST",
+				url: "/v1/chat/completions",
+				headers: authHeaders(),
+				body,
+			});
+			expect(afterTimeout.statusCode).toBe(200);
+			expect(completeCalls).toBe(2);
+		} finally {
+			rejectTimedOutCall?.();
+			await server.close();
+			db.close();
+		}
+	});
+
+	test("keeps the abort fallback armed after the adapter settles and while the buffered response flushes", async () => {
+		const db = openTestDb();
+		seedApiKey(db);
+		seedPricing(db, "gpt-buffered-flush-reset", 1_000_000, 2_000_000);
+		const adapter: ProviderAdapter = {
+			name: "openai",
+			async complete(): Promise<ChatResponse> {
+				return {
+					id: "chatcmpl-buffered-flush-reset",
+					object: "chat.completion",
+					created: 0,
+					model: "gpt-buffered-flush-reset",
+					choices: [
+						{
+							index: 0,
+							message: { role: "assistant", content: "buffered" },
+							finish_reason: "stop",
+						},
+					],
+					usage: {
+						prompt_tokens: 3,
+						completion_tokens: 5,
+						total_tokens: 8,
+					},
+				};
+			},
+			stream(): AsyncIterable<SseChunk> {
+				throw new Error("unused");
+			},
+		};
+		const server = await buildTestServer({ openai: adapter });
+		const gates = installBufferedResponseGate(server);
+		const address = await server.listen({ port: 0, host: "127.0.0.1" });
+		const body = JSON.stringify({
+			model: "gpt-buffered-flush-reset",
+			messages: [{ role: "user", content: "hello" }],
+			pg_no_cache: true,
+		});
+
+		try {
+			const { requestId, release } = await resetGatedBufferedResponse(
+				address,
+				body,
+				gates,
+			);
+			release();
+			const row = await readRow(db, requestId);
+			expect(row).toMatchObject({
+				streamed: 0,
+				cache_hit: 0,
+				status: "client_aborted",
+				error_code: null,
+				input_tokens: 3,
+				output_tokens: 5,
+				cost_micro_usd: 13,
+				cost_estimated: 0,
+			});
+			expect(
+				db.prepare("SELECT COUNT(*) AS count FROM requests").get(),
+			).toEqual({ count: 1 });
+		} finally {
+			for (const gate of gates) {
+				gate.release();
+			}
+			await server.close();
+			db.close();
+		}
+	});
+
+	test("logs a reset buffered cache hit once and releases its reservation", async () => {
+		const db = openTestDb();
+		seedApiKey(db, { budgetMicroUsdMonth: 3 });
+		seedPricing(db, "gpt-buffered-cache-reset", 1_000_000, 2_000_000);
+		const request: ChatRequest = {
+			model: "gpt-buffered-cache-reset",
+			messages: [{ role: "user", content: "abcd" }],
+			max_tokens: 1,
+		};
+		seedStreamingCacheEntry(db, request, {
+			id: "chatcmpl-buffered-cache-reset",
+			object: "chat.completion",
+			created: 0,
+			model: request.model,
+			choices: [
+				{
+					index: 0,
+					message: { role: "assistant", content: "cached" },
+					finish_reason: "stop",
+				},
+			],
+			usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+		});
+		const server = await buildTestServer({});
+		const gates = installBufferedResponseGate(server);
+		const address = await server.listen({ port: 0, host: "127.0.0.1" });
+		const body = JSON.stringify(request);
+
+		try {
+			const { requestId, release } = await resetGatedBufferedResponse(
+				address,
+				body,
+				gates,
+			);
+			release();
+			const row = await readRow(db, requestId);
+			expect(row).toMatchObject({
+				streamed: 0,
+				cache_hit: 1,
+				status: "client_aborted",
+				error_code: null,
+				input_tokens: 1,
+				output_tokens: 1,
+				cost_micro_usd: 0,
+				cost_estimated: 0,
+			});
+			expect(
+				db.prepare("SELECT COUNT(*) AS count FROM requests").get(),
+			).toEqual({ count: 1 });
+
+			// A leaked three-micro-USD reservation would reject this equal-budget hit.
+			const afterReset = await server.inject({
+				method: "POST",
+				url: "/v1/chat/completions",
+				headers: authHeaders(),
+				body,
+			});
+			expect(afterReset.statusCode).toBe(200);
+			expect(afterReset.headers["x-pg-cache"]).toBe("hit");
+		} finally {
+			for (const gate of gates) {
+				gate.release();
+			}
+			await server.close();
+			db.close();
+		}
+	});
+
+	test("preserves a provider failure when its buffered error response is reset", async () => {
+		const db = openTestDb();
+		seedApiKey(db, { budgetMicroUsdMonth: 3 });
+		seedPricing(db, "gpt-buffered-error-reset", 1_000_000, 2_000_000);
+		let completeCalls = 0;
+		const adapter: ProviderAdapter = {
+			name: "openai",
+			async complete(): Promise<ChatResponse> {
+				completeCalls += 1;
+				if (completeCalls === 1) {
+					throw new Error("internal provider details");
+				}
+				return {
+					id: "chatcmpl-after-buffered-error-reset",
+					object: "chat.completion",
+					created: 0,
+					model: "gpt-buffered-error-reset",
+					choices: [
+						{
+							index: 0,
+							message: { role: "assistant", content: "ok" },
+							finish_reason: "stop",
+						},
+					],
+					usage: {
+						prompt_tokens: 1,
+						completion_tokens: 1,
+						total_tokens: 2,
+					},
+				};
+			},
+			stream(): AsyncIterable<SseChunk> {
+				throw new Error("unused");
+			},
+		};
+		const server = await buildTestServer({ openai: adapter });
+		const gates = installBufferedResponseGate(server);
+		const address = await server.listen({ port: 0, host: "127.0.0.1" });
+		const body = JSON.stringify({
+			model: "gpt-buffered-error-reset",
+			messages: [{ role: "user", content: "abcd" }],
+			max_tokens: 1,
+			pg_no_cache: true,
+		});
+
+		try {
+			const { requestId, release } = await resetGatedBufferedResponse(
+				address,
+				body,
+				gates,
+			);
+			release();
+			const row = await readRow(db, requestId);
+			expect(row).toMatchObject({
+				streamed: 0,
+				cache_hit: 0,
+				status: "provider_error",
+				error_code: "provider_error",
+				input_tokens: null,
+				output_tokens: null,
+				cost_micro_usd: null,
+			});
+			await new Promise((resolve) => setTimeout(resolve, 20));
+			expect(
+				db
+					.prepare("SELECT COUNT(*) AS count FROM requests WHERE model = ?")
+					.get("gpt-buffered-error-reset"),
+			).toEqual({ count: 1 });
+
+			// The provider failure's full reservation must be available after logging.
+			const afterFailure = await server.inject({
+				method: "POST",
+				url: "/v1/chat/completions",
+				headers: authHeaders(),
+				body,
+			});
+			expect(afterFailure.statusCode).toBe(200);
+			expect(completeCalls).toBe(2);
+		} finally {
+			for (const gate of gates) {
+				gate.release();
+			}
+			await server.close();
+			db.close();
+		}
+	});
+});
+
+describe("POST /v1/chat/completions — pre-header streaming timeout", () => {
+	test("logs and reconciles when timeout wins before the client closes and the iterator rejects", async () => {
+		process.env.UPSTREAM_TIMEOUT_MS = "20";
+		await vi.resetModules();
+		const db = openTestDb();
+		seedApiKey(db, { budgetMicroUsdMonth: 3 });
+		seedPricing(db, "gpt-stream-timeout-before-reset", 1_000_000, 2_000_000);
+		let streamCalls = 0;
+		let markFirstStarted: (() => void) | undefined;
+		let markTimeoutAbort: (() => void) | undefined;
+		let rejectTimedOutCall: (() => void) | undefined;
+		const firstStarted = new Promise<void>((resolve) => {
+			markFirstStarted = resolve;
+		});
+		const timeoutAbort = new Promise<void>((resolve) => {
+			markTimeoutAbort = resolve;
+		});
+		const adapter: ProviderAdapter = {
+			name: "openai",
+			async complete(): Promise<ChatResponse> {
+				throw new Error("unused");
+			},
+			stream(_req: ChatRequest, signal: AbortSignal): AsyncIterable<SseChunk> {
+				streamCalls += 1;
+				if (streamCalls === 1) {
+					return {
+						[Symbol.asyncIterator](): AsyncIterator<SseChunk> {
+							let started = false;
+							return {
+								next(): Promise<IteratorResult<SseChunk>> {
+									if (started) {
+										return Promise.resolve({ done: true, value: undefined });
+									}
+									started = true;
+									markFirstStarted?.();
+									return new Promise((_resolve, reject) => {
+										signal.addEventListener(
+											"abort",
+											() => {
+												markTimeoutAbort?.();
+												rejectTimedOutCall = () => reject(signal.reason);
+											},
+											{ once: true },
+										);
+									});
+								},
+								async return(): Promise<IteratorResult<SseChunk>> {
+									return { done: true, value: undefined };
+								},
+							};
+						},
+					};
+				}
+				return (async function* successfulStream() {
+					yield roleFrame();
+					yield contentFrame("ok");
+					yield finishFrame();
+					yield usageFrame({
+						prompt_tokens: 1,
+						completion_tokens: 1,
+						total_tokens: 2,
+					});
+					yield DONE;
+				})();
+			},
+		};
+		const server = await buildTestServer({ openai: adapter });
+		const address = await server.listen({ port: 0, host: "127.0.0.1" });
+		const body = JSON.stringify({
+			model: "gpt-stream-timeout-before-reset",
+			messages: [{ role: "user", content: "abcd" }],
+			max_tokens: 1,
+			stream: true,
+			pg_no_cache: true,
+		});
+
+		try {
+			let responseStarted = false;
+			const client = httpRequest(
+				`${address}/v1/chat/completions`,
+				{
+					method: "POST",
+					headers: {
+						...authHeaders(),
+						"content-length": Buffer.byteLength(body),
+					},
+				},
+				(response) => {
+					responseStarted = true;
+					response.destroy();
+				},
+			);
+			client.on("error", () => undefined);
+			client.end(body);
+			await firstStarted;
+			await timeoutAbort;
+			client.destroy();
+			await new Promise((resolve) => setTimeout(resolve, 10));
+			rejectTimedOutCall?.();
+
+			const row = await readOnlyRowForModel(
+				db,
+				"gpt-stream-timeout-before-reset",
+			);
+			expect(responseStarted).toBe(false);
+			expect(row).toMatchObject({
+				streamed: 1,
+				cache_hit: 0,
+				status: "provider_error",
+				error_code: "provider_error",
+				input_tokens: null,
+				output_tokens: null,
+				cost_micro_usd: null,
+			});
+			await new Promise((resolve) => setTimeout(resolve, 20));
+			expect(
+				db
+					.prepare("SELECT COUNT(*) AS count FROM requests WHERE model = ?")
+					.get("gpt-stream-timeout-before-reset"),
+			).toEqual({ count: 1 });
+
+			// A leaked three-micro-USD reservation would reject this equal-budget call.
+			const afterTimeout = await server.inject({
+				method: "POST",
+				url: "/v1/chat/completions",
+				headers: authHeaders(),
+				body,
+			});
+			expect(afterTimeout.statusCode).toBe(200);
+			expect(streamCalls).toBe(2);
+		} finally {
+			rejectTimedOutCall?.();
+			await server.close();
+			db.close();
+		}
+	});
+
+	test("preserves a provider failure when the client closes during iterator cleanup", async () => {
+		const db = openTestDb();
+		seedApiKey(db, { budgetMicroUsdMonth: 3 });
+		seedPricing(db, "gpt-stream-error-before-reset", 1_000_000, 2_000_000);
+		let streamCalls = 0;
+		let markReturnStarted: (() => void) | undefined;
+		let releaseReturn: (() => void) | undefined;
+		const returnStarted = new Promise<void>((resolve) => {
+			markReturnStarted = resolve;
+		});
+		const returnReleased = new Promise<void>((resolve) => {
+			releaseReturn = resolve;
+		});
+		const adapter: ProviderAdapter = {
+			name: "openai",
+			async complete(): Promise<ChatResponse> {
+				throw new Error("unused");
+			},
+			stream(): AsyncIterable<SseChunk> {
+				streamCalls += 1;
+				if (streamCalls === 1) {
+					return {
+						[Symbol.asyncIterator](): AsyncIterator<SseChunk> {
+							return {
+								async next(): Promise<IteratorResult<SseChunk>> {
+									throw new Error("sanitized provider failure");
+								},
+								async return(): Promise<IteratorResult<SseChunk>> {
+									markReturnStarted?.();
+									await returnReleased;
+									return { done: true, value: undefined };
+								},
+							};
+						},
+					};
+				}
+				return (async function* successfulStream() {
+					yield roleFrame();
+					yield contentFrame("ok");
+					yield finishFrame();
+					yield usageFrame({
+						prompt_tokens: 1,
+						completion_tokens: 1,
+						total_tokens: 2,
+					});
+					yield DONE;
+				})();
+			},
+		};
+		const server = await buildTestServer({ openai: adapter });
+		const address = await server.listen({ port: 0, host: "127.0.0.1" });
+		const body = JSON.stringify({
+			model: "gpt-stream-error-before-reset",
+			messages: [{ role: "user", content: "abcd" }],
+			max_tokens: 1,
+			stream: true,
+			pg_no_cache: true,
+		});
+
+		try {
+			let responseStarted = false;
+			const client = httpRequest(
+				`${address}/v1/chat/completions`,
+				{
+					method: "POST",
+					headers: {
+						...authHeaders(),
+						"content-length": Buffer.byteLength(body),
+					},
+				},
+				(response) => {
+					responseStarted = true;
+					response.destroy();
+				},
+			);
+			client.on("error", () => undefined);
+			client.end(body);
+			await returnStarted;
+			client.destroy();
+			await new Promise((resolve) => setTimeout(resolve, 10));
+			releaseReturn?.();
+
+			const row = await readOnlyRowForModel(
+				db,
+				"gpt-stream-error-before-reset",
+			);
+			expect(responseStarted).toBe(false);
+			expect(row).toMatchObject({
+				streamed: 1,
+				cache_hit: 0,
+				status: "provider_error",
+				error_code: "provider_error",
+				input_tokens: null,
+				output_tokens: null,
+				cost_micro_usd: null,
+			});
+			await new Promise((resolve) => setTimeout(resolve, 20));
+			expect(
+				db
+					.prepare("SELECT COUNT(*) AS count FROM requests WHERE model = ?")
+					.get("gpt-stream-error-before-reset"),
+			).toEqual({ count: 1 });
+
+			// The failed call's full reservation must be available after its row lands.
+			const afterFailure = await server.inject({
+				method: "POST",
+				url: "/v1/chat/completions",
+				headers: authHeaders(),
+				body,
+			});
+			expect(afterFailure.statusCode).toBe(200);
+			expect(streamCalls).toBe(2);
+		} finally {
+			releaseReturn?.();
+			await server.close();
+			db.close();
+		}
+	});
+});
 
 describe("POST /v1/chat/completions — streaming success", () => {
 	test("writes a fully assembled successful stream and replays it without a second provider call", async () => {
