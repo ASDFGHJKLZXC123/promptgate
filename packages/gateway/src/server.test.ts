@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { isAbsolute, join } from "node:path";
 import type Database from "better-sqlite3";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
@@ -37,15 +37,29 @@ interface AdminApiKeyWithSpend extends AdminApiKey {
 }
 
 let previousDbPath: string | undefined;
+let previousDashboardDistPath: string | undefined;
 let previousAdminToken: string | undefined;
 let previousProviderKeys: Partial<
 	Record<(typeof PROVIDER_KEY_NAMES)[number], string>
 >;
 let tempDbDir: string | undefined;
 
+function restoreEnvironmentVariable(
+	name: string,
+	value: string | undefined,
+): void {
+	if (value === undefined) {
+		delete process.env[name];
+	} else {
+		process.env[name] = value;
+	}
+}
+
 beforeEach(async () => {
 	previousDbPath = process.env.DB_PATH;
+	previousDashboardDistPath = process.env.DASHBOARD_DIST_PATH;
 	previousAdminToken = process.env.ADMIN_TOKEN;
+	delete process.env.DASHBOARD_DIST_PATH;
 	previousProviderKeys = {};
 	for (const keyName of PROVIDER_KEY_NAMES) {
 		const previous = process.env[keyName];
@@ -61,17 +75,9 @@ beforeEach(async () => {
 });
 
 afterEach(() => {
-	if (previousDbPath === undefined) {
-		delete process.env.DB_PATH;
-	} else {
-		process.env.DB_PATH = previousDbPath;
-	}
-
-	if (previousAdminToken === undefined) {
-		delete process.env.ADMIN_TOKEN;
-	} else {
-		process.env.ADMIN_TOKEN = previousAdminToken;
-	}
+	restoreEnvironmentVariable("DB_PATH", previousDbPath);
+	restoreEnvironmentVariable("DASHBOARD_DIST_PATH", previousDashboardDistPath);
+	restoreEnvironmentVariable("ADMIN_TOKEN", previousAdminToken);
 
 	for (const keyName of PROVIDER_KEY_NAMES) {
 		const previous = previousProviderKeys[keyName];
@@ -101,6 +107,16 @@ function openTestDb(): Database.Database {
 		throw new Error("DB_PATH is not configured");
 	}
 	return openDatabase(dbPath);
+}
+
+function createDashboardDist(): string {
+	if (!tempDbDir) {
+		throw new Error("Temporary test directory is not configured");
+	}
+	const dashboardDistPath = join(tempDbDir, "dashboard");
+	mkdirSync(dashboardDistPath);
+	process.env.DASHBOARD_DIST_PATH = dashboardDistPath;
+	return dashboardDistPath;
 }
 
 async function buildServer() {
@@ -145,6 +161,117 @@ test("boots with all four provider keys absent and returns a healthy response", 
 	} finally {
 		await server.close();
 	}
+});
+
+test("serves an explicit dashboard root and its JavaScript asset", async () => {
+	const dashboardDistPath = createDashboardDist();
+	mkdirSync(join(dashboardDistPath, "assets"));
+	writeFileSync(join(dashboardDistPath, "index.html"), "<h1>PromptGate</h1>");
+	writeFileSync(
+		join(dashboardDistPath, "assets", "dashboard.js"),
+		"console.log('PromptGate');",
+	);
+
+	const server = await buildServer();
+	try {
+		const [index, asset] = await Promise.all([
+			server.inject({ method: "GET", url: "/" }),
+			server.inject({ method: "GET", url: "/assets/dashboard.js" }),
+		]);
+
+		expect(index.statusCode).toBe(200);
+		expect(index.headers["content-type"]).toMatch(/^text\/html/);
+		expect(index.body).toBe("<h1>PromptGate</h1>");
+		expect(asset.statusCode).toBe(200);
+		expect(asset.headers["content-type"]).toMatch(/^application\/javascript/);
+		expect(asset.body).toBe("console.log('PromptGate');");
+	} finally {
+		await server.close();
+	}
+});
+
+test("dashboard files cannot shadow health or admin API routes", async () => {
+	const dashboardDistPath = createDashboardDist();
+	mkdirSync(join(dashboardDistPath, "admin", "api"), { recursive: true });
+	mkdirSync(join(dashboardDistPath, "v1"), { recursive: true });
+	writeFileSync(join(dashboardDistPath, "healthz"), "not a health check");
+	writeFileSync(join(dashboardDistPath, "admin", "api", "keys"), "not an API");
+	writeFileSync(join(dashboardDistPath, "v1", "models"), "not an API");
+
+	const server = await buildServer();
+	try {
+		const health = await server.inject({ method: "GET", url: "/healthz" });
+		const [admin, models] = await Promise.all([
+			server.inject({
+				method: "GET",
+				url: "/admin/api/keys",
+			}),
+			server.inject({
+				method: "GET",
+				url: "/v1/models",
+			}),
+		]);
+
+		expect(health.statusCode).toBe(200);
+		expect(health.json()).toEqual({ ok: true });
+		expect(admin.statusCode).toBe(401);
+		expect(admin.json()).toMatchObject({
+			error: { code: "invalid_admin_token" },
+		});
+		expect(models.statusCode).toBe(401);
+		expect(models.json()).toMatchObject({
+			error: { code: "invalid_pg_key" },
+		});
+	} finally {
+		await server.close();
+	}
+});
+
+test("dashboard serving ignores dotfiles and encoded traversal attempts", async () => {
+	const dashboardDistPath = createDashboardDist();
+	if (!tempDbDir) {
+		throw new Error("Temporary test directory is not configured");
+	}
+	writeFileSync(join(dashboardDistPath, ".secret"), "DASHBOARD_SECRET");
+	writeFileSync(join(tempDbDir, "outside-secret.txt"), "OUTSIDE_SECRET");
+
+	const server = await buildServer();
+	try {
+		const responses = await Promise.all([
+			server.inject({ method: "GET", url: "/.secret" }),
+			server.inject({
+				method: "GET",
+				url: "/%2e%2e/outside-secret.txt",
+			}),
+			server.inject({
+				method: "GET",
+				url: "/%252e%252e/outside-secret.txt",
+			}),
+		]);
+
+		for (const response of responses) {
+			expect(response.statusCode).toBe(404);
+			expect(response.body).not.toContain("DASHBOARD_SECRET");
+			expect(response.body).not.toContain("OUTSIDE_SECRET");
+		}
+	} finally {
+		await server.close();
+	}
+});
+
+test("uses the package dashboard dist root by default", async () => {
+	const { config } = await import("./config.js");
+
+	expect(isAbsolute(config.DASHBOARD_DIST_PATH)).toBe(true);
+	expect(
+		config.DASHBOARD_DIST_PATH.endsWith(join("packages", "dashboard", "dist")),
+	).toBe(true);
+});
+
+test("rejects a relative dashboard root override", async () => {
+	process.env.DASHBOARD_DIST_PATH = "packages/dashboard/dist";
+
+	await expect(import("./config.js")).rejects.toThrow("DASHBOARD_DIST_PATH");
 });
 
 test("admin API rejects missing or incorrect admin token", async () => {

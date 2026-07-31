@@ -1,5 +1,6 @@
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
+import fastifyStatic from "@fastify/static";
 import fastify, { type FastifyInstance } from "fastify";
 import { registerEvalAdminRoutes } from "./admin/evals.js";
 import { registerAdminRoutes } from "./admin/keys.js";
@@ -120,6 +121,14 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
 		},
 		{ prefix: "/v1" },
 	);
+
+	// Register after the API routes so their exact paths always take precedence
+	// over dashboard files with the same names.
+	server.register(fastifyStatic, {
+		root: config.DASHBOARD_DIST_PATH,
+		prefix: "/",
+		dotfiles: "ignore",
+	});
 
 	server.addHook("onClose", async () => {
 		clearInterval(cacheSweep);

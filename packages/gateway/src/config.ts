@@ -1,8 +1,18 @@
+import { isAbsolute } from "node:path";
+import { fileURLToPath } from "node:url";
 import { z } from "zod";
+
+const defaultDashboardDistPath = fileURLToPath(
+	new URL("../../dashboard/dist", import.meta.url),
+);
 
 const Env = z.object({
 	PORT: z.coerce.number().default(8787),
 	DB_PATH: z.string().default("./data/promptgate.db"),
+	DASHBOARD_DIST_PATH: z
+		.string()
+		.refine(isAbsolute, "DASHBOARD_DIST_PATH must be an absolute path.")
+		.default(defaultDashboardDistPath),
 	ADMIN_TOKEN: z.string().min(16),
 	ANTHROPIC_API_KEY: z.string().optional(),
 	OPENAI_API_KEY: z.string().optional(),
