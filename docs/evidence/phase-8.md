@@ -2,8 +2,8 @@
 
 Date started: 2026-07-30
 
-Status: **in progress — step 3 complete; Truthfulness and Verify Amendment A
-owner-approved; step 4 next**.
+Status: **in progress — step 4 complete; Truthfulness and Verify Amendment A
+owner-approved; seven-day observation window opened 2026-07-31**.
 
 ## Step 1 — persistent deployment and dogfood key
 
@@ -364,6 +364,188 @@ untouched original repository, isolated timeout patch, p95 exclusion, and
 closed observation window. It found no credential leakage or overclaim and
 returned `APPROVE`.
 
-Step 4 will now put `web_builder_request@prod` live, prove a version-label
-canary and rollback with the next dogfood call, and only after the rolled-back
-call succeeds may the seven-day observation window open.
+Step 4 then put `web_builder_request@prod` live, proved a version-label canary
+and rollback with the next dogfood call, and opened the seven-day observation
+window only after the rolled-back call succeeded.
+
+## Step 4 — live registry prompt, canary, and rollback
+
+The app integration was made only in the ignored dogfood clone. External commit
+`ff47ea8fc8af17933b0ec5a2f0742c6f942324d3` changes the OpenAI Chat request
+body only when the normalized provider ID is exactly `promptgate`:
+
+```json
+{
+  "model": "deepseek-v4-flash",
+  "messages": [],
+  "pg_prompt": "web_builder_request@prod",
+  "pg_vars": {
+    "request_prompt": "<the complete generate, edit, or repair prompt assembled by web_builder_llm>"
+  },
+  "response_format": {
+    "type": "json_object"
+  }
+}
+```
+
+Every other OpenAI-compatible provider retains exactly one user message and no
+`pg_prompt`/`pg_vars` fields. The response format, sampling, authentication,
+135-second dogfood timeout, retry policy, and buffered transport are unchanged.
+Focused request-shape tests passed 33/33; the complete external suite passed
+380/380 with zero failures, errors, or skips; packaging passed; and the clone
+was clean at the commit. A fresh independent read-only audit rechecked
+generation, modification, repair/re-ask, direct-provider isolation, preserved
+transport behavior, the untouched original repository, and the green gates,
+then returned `APPROVE`.
+
+Before restarting the patched app, the authenticated admin API created registry
+prompt ID 4:
+
+```text
+slug=web_builder_request
+description=Registry-owned request envelope for web_builder_llm dogfood traffic.
+```
+
+Version 1 is the long-term direct-equivalent baseline:
+
+```json
+{
+  "messages_json": [
+    {
+      "role": "user",
+      "content": "{{request_prompt}}"
+    }
+  ],
+  "variables_json": [
+    {
+      "name": "request_prompt",
+      "required": true,
+      "description": "The complete generate, edit, or repair request assembled by web_builder_llm."
+    }
+  ],
+  "notes": "Phase 8 baseline: direct-equivalent one-user-message envelope."
+}
+```
+
+Version 2 is the bounded rollback canary. It prepends this system message before
+the same required user variable:
+
+```text
+Check the supplied request carefully and preserve every requested section and
+accessibility constraint while obeying its structured-output contract.
+```
+
+Its notes are `Phase 8 canary used only to prove label deployment and
+rollback.` The plain-text diff endpoint showed only that additional system
+message. The first label write bound `prod` from no prior version to v2; an
+in-container read-only query confirmed label-history row 8
+(`null → 2`, `2026-07-31 11:34:42` UTC).
+
+The patched app was then restarted once. No app restart or client-code change
+occurred between the canary and rollback calls. Both used this exact visible
+modification request:
+
+```text
+Phase 8 registry rollback proof 2026-07-31-R1: Ensure the footer contains exactly one visible sentence reading 'Repairs made neighborly.' Preserve every existing section, including exactly three FAQ questions and the visible 'Walk-ins welcome.' sentence, and remain text-only.
+```
+
+### Canary call — `prod → v2`
+
+The UI showed `Applying edit…` without progress events while the buffered call
+ran, then replayed `START`, provider `STATUS`, `TOKEN_COUNT`, and `DONE` after
+completion. It created immutable edit snapshot
+`e7c6baee0890440dae42584af5a21544`, parent
+`18e7ea04b0ce487c9a6ef0937a4726fc`, titled
+`Copper Spoke Footer Rollback`, at `2026-07-31T11:39:01.780062Z`.
+
+Durable row 428 proves the live registry resolution:
+
+```text
+request_id=3080499a-df66-4995-8d5f-081d2eca3fe1
+key=web_builder_llm
+provider=deepseek
+model=deepseek-v4-flash
+prompt_id=4
+prompt_version=2
+cache_hit=0
+streamed=0
+input_tokens=3195
+output_tokens=7593
+cost_micro_usd=2573
+cost_estimated=0
+status=ok
+error_code=null
+total_ms=41173
+```
+
+The rendered page contained exactly one `Repairs made neighborly.` sentence,
+one `Walk-ins welcome.` sentence, and three FAQ disclosure elements.
+
+### Confirmed rollback and next call — `prod → v1`
+
+After row 428 was verified, the authenticated label write returned exactly
+`from_version: 2` and `to_version: 1`. A detail read confirmed current
+`prod = 1`; read-only label history confirmed row 9
+(`2 → 1`, `2026-07-31 11:39:46` UTC).
+
+The exact same visible app prompt was the next dogfood call. It succeeded
+without an app restart and created immutable edit snapshot
+`1b84dc94357c428886a862779aeaad9d`, parent
+`e7c6baee0890440dae42584af5a21544`, titled
+`Copper Spoke Footer Verification`, at
+`2026-07-31T11:40:15.829925Z`. Durable row 429 proves that next call served the
+rolled-back version:
+
+```text
+request_id=52f3cd46-38ff-4dfe-8231-e35d425d0447
+key=web_builder_llm
+provider=deepseek
+model=deepseek-v4-flash
+prompt_id=4
+prompt_version=1
+cache_hit=0
+streamed=0
+input_tokens=3167
+output_tokens=3476
+cost_micro_usd=1311
+cost_estimated=0
+status=ok
+error_code=null
+total_ms=20834
+```
+
+The v1 UI again replayed the four progress events only after completion. The
+v2 and v1 snapshots each contain exactly one required footer sentence, one
+`Walk-ins welcome.` sentence, and three FAQ elements. Their two output files
+are byte-identical:
+
+```text
+index.html sha256=82eaf1ab4c8684ec1ccc3aa19b99a295d59e4f0fa073b6c8587413b66dda973d
+styles.css sha256=df66c49008b5e3685654d6fd6af9476e0f6cf62295979973e7b750e3d8f352dd
+```
+
+Thus the served prompt version changed without changing the client call site,
+while the requested page semantics remained stable. `prod` is intentionally
+left at v1.
+
+### Observation-window opening state
+
+The successful rolled-back v1 call opens the seven-consecutive-calendar-day
+window on 2026-07-31. The inclusive target window is 2026-07-31 through
+2026-08-06, and 2026-07-31 is day 1 with real registry-backed traffic. At least
+four additional distinct calendar days in that window still need a real
+dogfood request.
+
+At opening, key 26 remains enabled with its exact 60 RPM and 5,000,000
+micro-USD monthly cap. It has five durable dogfood rows, retained spend 11,106
+micro-USD, exact cache savings 5,089 micro-USD, zero estimated cache savings,
+and zero unknown legacy cache-hit rows. Including the explicitly separate
+pre-fix orphan, known provider-priced completions total 16,195 micro-USD.
+
+A fresh independent read-only Step 4 evidence/security audit reconciled the
+external commits and original repository, exact healthy gateway image,
+registry definitions/current label/history, consecutive rows 428/429, one
+unchanged app process, snapshot parent chain/timestamps/token counts, rendered
+content counts, byte-identical file hashes, retained and orphan-inclusive
+accounting, and observation-window date math. It found no credential disclosure
+or material overclaim and returned `APPROVE`.
