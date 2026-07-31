@@ -2,8 +2,8 @@
 
 Date started: 2026-07-30
 
-Status: **in progress — step 2 complete; Truthfulness and Verify Amendment A
-owner-approved; step 3 next**.
+Status: **in progress — step 3 complete; Truthfulness and Verify Amendment A
+owner-approved; step 4 next**.
 
 ## Step 1 — persistent deployment and dogfood key
 
@@ -215,3 +215,155 @@ pre-amendment evidence written in the present tense, and a missing requirement
 to report the count of unknown legacy cache hits separately. Those findings
 were corrected. The fresh re-audit checked the complete diff against every
 approved Amendment A element and returned `APPROVE`.
+
+## Step 3 — buffered dogfood verification and lifecycle recovery
+
+The normal external flow ran through the real built PromptGate deployment and
+the finished app's existing UI. The original finished repository remained
+unchanged at tracked commit
+`1fe570bb175834107409739703e03efdd5805fc2`, including its unrelated
+pre-existing untracked `TECH_STACK.md`. To avoid changing that repository, an
+ignored local clone under PromptGate's `data/` directory supplied the dogfood
+runtime. Its only external-app correction makes the OpenAI Chat request timeout
+configurable, keeps the 90-second default, and uses 135 seconds for this
+dogfood deployment. The isolated external suite passed all 377 tests, and an
+independent review returned `APPROVE`; the local clone records the change as
+`5335d9f`.
+
+The first PromptGate generation used the exact prompt:
+
+```text
+Phase 8 dogfood 2026-07-31: Create a compact single-page landing page for a fictional neighborhood bike repair shop named Copper Spoke. Include a hero, three services, business hours, and a contact call to action. Use accessible high-contrast colors. Text only; do not request or generate images.
+```
+
+It created project `0036b6e2b6254e1795313ac555032eb0` and immutable active
+snapshot `2f03a5dae74b4e3f8494cb112c93f96e`. The app visibly replayed `START`,
+provider `STATUS`, `TOKEN_COUNT`, and `DONE` only after the buffered provider
+call completed. PromptGate retained request row 425 with request ID
+`39c2467d-b392-452c-af6c-450733f0a0aa`, model `deepseek-v4-flash`, 574 input
+tokens, 7,962 output tokens, exact cost 2,309 micro-USD, cache miss,
+non-streaming status, `ok`, and 48,141 ms total latency.
+
+The first edit used this exact prompt:
+
+```text
+Phase 8 dogfood edit 2026-07-31: Add a compact accessible FAQ section with exactly three questions below the business hours. Keep all existing sections and remain text-only.
+```
+
+That attempt exposed two independent timeout/lifecycle facts:
+
+1. `web_builder_llm` stopped waiting at its fixed 90-second timeout before
+   PromptGate's 120-second upstream timeout, so the UI reported failure even
+   though the provider later completed.
+2. PromptGate's non-streaming persistence depended on Fastify `onResponse`.
+   Once the client disconnected, that hook did not retain a row or reconcile
+   the in-memory budget reservation for the completed provider response.
+
+The response still populated PromptGate's cache with an exact priced value of
+5,089 micro-USD. There was no corresponding request row anywhere in the live
+database. That cache-entry/row mismatch is retained as proof of one known
+pre-fix orphaned provider completion; no synthetic row was inserted and no
+historical spend was backfilled.
+
+After the narrow external timeout correction, repeating the edit returned the
+already-completed cached result in 33 ms. It created snapshot
+`e90ee6af4ef04b1eb5ac8c4d46f71679`, retained row 426 with request ID
+`cd6ca2e6-9a6e-45b4-821a-8e09a62bbc93`, 2,668 input and 16,838 output tokens,
+cache hit, exact saved cost 5,089 micro-USD, zero charged cost, non-streaming
+status, and `ok`. The page retained every prior section and contained exactly
+three FAQ questions. The app again replayed the four progress events only after
+completion; this is buffered UX proof, not token-streaming proof.
+
+### Lifecycle correction
+
+PromptGate commit `f6cd9fa335ebfed300018b5d8de9c156917e2a74`
+(`fix: persist buffered disconnect outcomes`) makes non-streaming disconnect
+settlement explicit. A client disconnect now aborts the upstream operation,
+persists exactly one `client_aborted` row with conservative prompt-only
+estimated metering when no completion was received, and reconciles the budget
+only after durable logging. Buffered success and cache-hit flushes release
+their lifecycle state. First-cause semantics preserve an earlier
+`provider_error` or timeout if the client disconnects during cleanup. Adjacent
+pre-header streaming timeout/provider-error cleanup received the same
+first-cause protection.
+
+Seven real-loopback regressions cover the corrected lifecycle paths. The final
+focused suite passed 71/71, lint checked 179 files, the exact clean-build
+repository run passed all 859 tests in 67 files, all packages built, Compose
+configuration was valid, and diff checks were clean. Earlier non-authoritative
+full runs encountered unrelated five-second load-test scheduling timeouts and,
+once, stale/missing generated eval artifacts; the affected isolated tests were
+green, and the clean build followed by the exact full test command is the
+authoritative result.
+
+Docker Desktop failed while the persistent deployment was being inspected and
+the old container exited 255. A controlled Docker Desktop restart restored the
+engine. Before rebuilding, the old image was started once and its admin API
+proved the persistent database was intact: key 26 still had its exact $5 cap
+and the two durable rows above. No host-side SQLite connection was opened while
+the gateway was live. The exact corrected source was then rebuilt and
+force-recreated as:
+
+```text
+commit=f6cd9fa335ebfed300018b5d8de9c156917e2a74
+image_id=sha256:b0b39a7bffe71e7a4b7e3ffd9231d3ad470175edffca9ff362fcd12c61a4e0b8
+container=promptgate-gateway-1
+listen=127.0.0.1:8787
+status=running
+health=healthy
+restart_count=0
+database=existing persistent ./data/promptgate.db
+```
+
+The post-fix live edit used the unique prompt:
+
+```text
+Phase 8 post-fix accounting 2026-07-31-A: Add one short visible sentence reading exactly 'Walk-ins welcome.' immediately before the contact call to action. Preserve every existing section, including exactly three FAQ questions, and remain text-only.
+```
+
+The app remained in `Applying edit…` with no progress events while the
+buffered call ran, then succeeded with snapshot
+`18e7ea04b0ce487c9a6ef0937a4726fc`, parent
+`e90ee6af4ef04b1eb5ac8c4d46f71679`. The page preserved exactly three FAQ
+questions and visibly added `Walk-ins welcome.` in the requested position.
+Only after completion did the UI replay `START`, provider `STATUS`,
+`TOKEN_COUNT`, and `DONE`.
+
+PromptGate durably retained row 427 with request ID
+`f02b20d9-75c1-4320-a1ca-cf56f07bb2ad`, model
+`deepseek-v4-flash`, 3,157 input and 15,968 output tokens, exact cost 4,913
+micro-USD, cache miss, non-streaming status, `ok`, and 85,962 ms total latency.
+The row's prompt ID/version are null as expected before step 4 introduces the
+registry-backed request. Safe key metadata then showed the key enabled at its
+unchanged 60 RPM and 5,000,000-micro-USD monthly cap with 7,222 micro-USD
+retained month-to-date spend.
+
+### Truthful accounting and direct comparison
+
+At the step boundary, the live database therefore contains exactly three
+durable dogfood rows: two uncached successful rows and one cached successful
+row. Retained spend is 7,222 micro-USD. Known exact cache savings are 5,089
+micro-USD, with zero estimated savings and zero unknown legacy cache-hit rows.
+Separately, the known pre-fix orphaned provider completion cost 5,089
+micro-USD, so known provider-priced completions total 12,311 micro-USD. The
+retained month-to-date ledger omits that orphan; the two figures must not be
+presented as equivalent.
+
+A separate direct `deepseek/deepseek-chat` generation used the exact original
+generation prompt and created project `541e5c1614324eacbd40da50c9e17b65`
+with active snapshot `73ff498ff04c4ebca266860065952050`. It showed the same
+buffered UX: no progress events while generating, then the four events replayed
+after completion. Because the direct provider/model identity is not the same as
+PromptGate's routed `deepseek-v4-flash`, this call is only a buffered-behavior
+control and is excluded from the Amendment A matched p95 calculation.
+
+A fresh independent read-only evidence/security audit verified the source,
+clean-build 859-test gate, exact live image and persistent mount, safe key
+metadata, rows 425–427, retained spend/savings, separate orphan disclosure,
+untouched original repository, isolated timeout patch, p95 exclusion, and
+closed observation window. It found no credential leakage or overclaim and
+returned `APPROVE`.
+
+Step 4 will now put `web_builder_request@prod` live, prove a version-label
+canary and rollback with the next dogfood call, and only after the rolled-back
+call succeeds may the seven-day observation window open.
