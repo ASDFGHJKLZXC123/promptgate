@@ -13,12 +13,18 @@ export interface CacheHit {
 	response: ChatResponse;
 	/** Null is an intentionally cached non-streaming response with no provider usage. */
 	usage: ChatUsage | null;
+	/** The source completion price frozen when this cache entry was written. */
+	pricedCostMicroUsd: number;
+	/** Null means a legacy cache entry has unknown price provenance. */
+	pricedCostEstimated: boolean | null;
 }
 
 interface CacheEntryRow {
 	model: string;
 	response_json: string;
 	usage_json: string;
+	priced_cost_micro_usd: number;
+	priced_cost_estimated: number | null;
 }
 
 function parseJson(text: string): { ok: true; value: unknown } | { ok: false } {
@@ -42,7 +48,8 @@ export function findAndRecordCacheHit(
 	return db.transaction(() => {
 		const row = db
 			.prepare(
-				`SELECT model, response_json, usage_json
+				`SELECT model, response_json, usage_json,
+					priced_cost_micro_usd, priced_cost_estimated
 				 FROM cache_entries
 				 WHERE hash = ? AND expires_at > datetime('now')`,
 			)
@@ -61,6 +68,15 @@ export function findAndRecordCacheHit(
 		const response = ChatResponseSchema.safeParse(responseValue.value);
 		const usage = ChatUsageSchema.nullable().safeParse(usageValue.value);
 		if (!response.success || !usage.success) {
+			return null;
+		}
+		if (
+			!Number.isSafeInteger(row.priced_cost_micro_usd) ||
+			row.priced_cost_micro_usd < 0 ||
+			(row.priced_cost_estimated !== null &&
+				row.priced_cost_estimated !== 0 &&
+				row.priced_cost_estimated !== 1)
+		) {
 			return null;
 		}
 		if (input.requireUsage && usage.data === null) {
@@ -97,6 +113,11 @@ export function findAndRecordCacheHit(
 			// streaming replay when the stored response omitted its optional usage.
 			response: response.data,
 			usage: usage.data,
+			pricedCostMicroUsd: row.priced_cost_micro_usd,
+			pricedCostEstimated:
+				row.priced_cost_estimated === null
+					? null
+					: row.priced_cost_estimated === 1,
 		};
 	})();
 }
@@ -115,6 +136,7 @@ export function upsertCacheEntry(
 		response: ChatResponse;
 		usage: ChatUsage | null;
 		pricedCostMicroUsd: number;
+		pricedCostEstimated: boolean;
 		ttlHours: number;
 	},
 ): void {
@@ -142,9 +164,11 @@ export function upsertCacheEntry(
 	db.prepare(
 		`INSERT INTO cache_entries (
 			hash, model, response_json, usage_json, priced_cost_micro_usd,
+			priced_cost_estimated,
 			expires_at, hit_count, last_hit_at
 		) VALUES (
 			@hash, @model, @response_json, @usage_json, @priced_cost_micro_usd,
+			@priced_cost_estimated,
 			datetime('now', @ttl_modifier), 0, NULL
 		)
 		ON CONFLICT(hash) DO UPDATE SET
@@ -152,6 +176,7 @@ export function upsertCacheEntry(
 			response_json = excluded.response_json,
 			usage_json = excluded.usage_json,
 			priced_cost_micro_usd = excluded.priced_cost_micro_usd,
+			priced_cost_estimated = excluded.priced_cost_estimated,
 			created_at = datetime('now'),
 			expires_at = excluded.expires_at,
 			hit_count = 0,
@@ -162,6 +187,7 @@ export function upsertCacheEntry(
 		response_json: JSON.stringify(response),
 		usage_json: JSON.stringify(usage),
 		priced_cost_micro_usd: input.pricedCostMicroUsd,
+		priced_cost_estimated: input.pricedCostEstimated ? 1 : 0,
 		ttl_modifier: `+${input.ttlHours} hours`,
 	});
 }

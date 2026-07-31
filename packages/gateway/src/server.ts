@@ -4,6 +4,7 @@ import fastifyStatic from "@fastify/static";
 import fastify, { type FastifyInstance } from "fastify";
 import { registerEvalAdminRoutes } from "./admin/evals.js";
 import { registerAdminRoutes } from "./admin/keys.js";
+import { registerAdminMetricsRoutes } from "./admin/metrics.js";
 import { registerPromptAdminRoutes } from "./admin/prompts.js";
 import { config } from "./config.js";
 import { openDatabase } from "./db/index.js";
@@ -95,6 +96,7 @@ export function buildServer(options: BuildServerOptions = {}): FastifyInstance {
 	server.register(
 		(adminServer) => {
 			registerAdminRoutes(adminServer, db, budgetGuard);
+			registerAdminMetricsRoutes(adminServer, db);
 			registerPromptAdminRoutes(adminServer, db);
 			registerEvalAdminRoutes(adminServer, db);
 		},

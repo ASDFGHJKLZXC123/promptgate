@@ -166,6 +166,7 @@ test("migrations 002 and 003 upgrade an already-applied 001 database without los
 			"003_provider_pricing.sql",
 			"004_registry.sql",
 			"005_evals.sql",
+			"006_dashboard_provenance.sql",
 		]);
 	} finally {
 		legacyDb.close();
@@ -224,6 +225,7 @@ test("migration 003 preserves pricing rows from an already-applied 002 database"
 			"003_provider_pricing.sql",
 			"004_registry.sql",
 			"005_evals.sql",
+			"006_dashboard_provenance.sql",
 		]);
 	} finally {
 		legacyDb.close();
@@ -251,6 +253,30 @@ test("stores optional fields as NULL when omitted and preserves feature/status/e
 	expect(row.input_tokens).toBeNull();
 	expect(row.output_tokens).toBeNull();
 	expect(row.cost_micro_usd).toBeNull();
+});
+
+test("persists zero known cache savings for new non-hits and preserves unknown hit provenance", () => {
+	insertRequestLog(db, baseInput());
+	insertRequestLog(
+		db,
+		baseInput({
+			requestId: "33333333-3333-4333-8333-333333333333",
+			cacheHit: true,
+			cacheSavedMicroUsd: 42,
+			cacheSavedEstimated: null,
+		}),
+	);
+
+	expect(
+		db
+			.prepare(
+				"SELECT cache_saved_micro_usd, cache_saved_estimated FROM requests ORDER BY id",
+			)
+			.all(),
+	).toEqual([
+		{ cache_saved_micro_usd: 0, cache_saved_estimated: 0 },
+		{ cache_saved_micro_usd: 42, cache_saved_estimated: null },
+	]);
 });
 
 describe("findRequestUsageForKey", () => {

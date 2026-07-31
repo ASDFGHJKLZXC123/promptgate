@@ -30,6 +30,8 @@ interface RequestsRow {
 	output_tokens: number | null;
 	cost_micro_usd: number | null;
 	cost_estimated: number;
+	cache_saved_micro_usd: number | null;
+	cache_saved_estimated: number | null;
 	total_ms: number | null;
 	status: string;
 	error_code: string | null;
@@ -615,6 +617,8 @@ describe("POST /v1/chat/completions — success path", () => {
 			expect(row.output_tokens).toBe(1);
 			expect(row.cost_micro_usd).toBe(5);
 			expect(row.cost_estimated).toBe(0);
+			expect(row.cache_saved_micro_usd).toBe(0);
+			expect(row.cache_saved_estimated).toBe(0);
 			expect(row.status).toBe("ok");
 			expect(row.error_code).toBeNull();
 			expect(row.streamed).toBe(0);
@@ -623,7 +627,7 @@ describe("POST /v1/chat/completions — success path", () => {
 			expect(
 				db
 					.prepare(
-						"SELECT response_json, usage_json, priced_cost_micro_usd FROM cache_entries",
+						"SELECT response_json, usage_json, priced_cost_micro_usd, priced_cost_estimated FROM cache_entries",
 					)
 					.get(),
 			).toEqual({
@@ -634,6 +638,7 @@ describe("POST /v1/chat/completions — success path", () => {
 					total_tokens: 2,
 				}),
 				priced_cost_micro_usd: 5,
+				priced_cost_estimated: 0,
 			});
 
 			const replay = await server.inject({
@@ -648,6 +653,14 @@ describe("POST /v1/chat/completions — success path", () => {
 			expect(replay.headers["x-pg-cache"]).toBe("hit");
 			expect(replay.headers["x-pg-cost-usd"]).toBe("0.000000");
 			expect(calls).toHaveLength(1);
+			await new Promise((resolve) => setTimeout(resolve, 20));
+			expect(
+				db
+					.prepare(
+						"SELECT cache_saved_micro_usd, cache_saved_estimated FROM requests WHERE request_id = ?",
+					)
+					.get(replay.headers["x-pg-request-id"]),
+			).toEqual({ cache_saved_micro_usd: 5, cache_saved_estimated: 0 });
 		} finally {
 			await server.close();
 			db.close();
@@ -725,6 +738,8 @@ describe("POST /v1/chat/completions — success path", () => {
 				cost_estimated: 1,
 				input_tokens: 2,
 				output_tokens: 3,
+				cache_saved_micro_usd: 8,
+				cache_saved_estimated: 1,
 			});
 		} finally {
 			await server.close();
@@ -919,6 +934,8 @@ describe("POST /v1/chat/completions — cache read path", () => {
 				output_tokens: 4,
 				cost_micro_usd: 0,
 				cost_estimated: 0,
+				cache_saved_micro_usd: 77,
+				cache_saved_estimated: null,
 				status: "ok",
 			});
 			expect(

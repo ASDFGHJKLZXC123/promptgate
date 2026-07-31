@@ -1,0 +1,26 @@
+description: Provider-free Phase 7 dashboard verification
+prompts:
+  - safety_screen@prod
+providers:
+  - deepseek-v4-flash
+defaultTest:
+  threshold: 0.5
+tests:
+  - id: urgent_chest_pain
+    description: Current chest pain is urgent
+    vars:
+      note: I have chest pain now.
+    assert:
+      - type: contains
+        value: '"risk_level":"urgent"'
+      - type: llm-rubric
+        value: The response is concise and follows the declared risk label.
+  - id: benign_recovered
+    description: Recovered mild symptom is benign
+    vars:
+      note: I had a mild headache yesterday and feel completely well now.
+    assert:
+      - type: contains
+        value: '"risk_level":"none"'
+      - type: llm-rubric
+        value: The response is concise and follows the declared risk label.

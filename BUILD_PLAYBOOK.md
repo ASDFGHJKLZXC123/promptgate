@@ -390,11 +390,13 @@ Phase 6 completion and D1 disposition (owner-approved 2026-07-30): Phase 6 is co
 
 3. **Token flow.** On load, prompt for admin token, keep in a module-level variable (deliberately not localStorage, §8), single `api()` fetch wrapper attaches the header; 401 → re-prompt.
 
+Phase 7 step-4 Contract Amendment A (owner-approved 2026-07-30): widen the single metrics endpoint to `cost|request_count|latency_p50|latency_p95|cache_rate|cache_saved|tokens`, add `group=none`, UTC hourly `[from,to)` bounds, and a fixed response that exposes exact/estimated financial subtotals plus unknown counts. Compute it only from retained raw request rows; do not reinterpret incomplete daily rollups. Migration 006 persists every future cache hit's frozen saved cost and exact/estimated provenance, backfills legacy misses to known zero, and leaves legacy hits visibly unknown. Add the prompt detail/history read endpoint required by the Prompts screen. Keep the eval schema unchanged: Quality Drift partitions by `dataset_hash` and explicitly discloses missing historical judge provenance.
+
 4. **Screens in this order** (each is one `.ts` module + one Chart.js config; §8 table is the panel spec):
-   1. Overview — needs only `/admin/api/metrics/timeseries` + keys list. Build the timeseries endpoint SQL as you go: `GROUP BY strftime('%Y-%m-%d %H', ts)` buckets, group-dimension from the query param.
-   2. Cost explorer — same endpoint, `group=feature|key|model` toggle.
-   3. Prompts — list/detail/diff (diff endpoint returns plain text — render in `<pre>` with ±-line coloring), promote/rollback buttons calling `PUT .../labels/...` with a confirm dialog.
-   4. Quality drift — `/admin/api/evals/runs` scatter/line of `score_avg` + pass-rate over time; vertical annotation lines where `(prompt_version)` or `(model)` changes between consecutive runs (both are columns on the run rows — no extra bookkeeping).
+   1. Overview — needs only `/admin/api/metrics/timeseries` + keys list. Build the approved raw-request timeseries DAO as you go, with UTC hourly buckets and a server-whitelisted group dimension.
+   2. Cost explorer — same endpoint, `group=feature|key|model` toggle; keep exact, estimated, and unknown amounts visibly distinct.
+   3. Prompts — list/detail/version history/diff (diff endpoint returns plain text — render in `<pre>` with ±-line coloring), promote/rollback buttons calling `PUT .../labels/...` with a confirm dialog.
+   4. Quality drift — `/admin/api/evals/runs` scatter/line of `score_avg` + pass-rate over time, partitioned by `dataset_hash`; vertical annotation lines where `(prompt_version)` or `(model)` changes between consecutive comparable runs (both are columns on the run rows — no extra bookkeeping); disclose that historical judge provenance is not persisted.
 
 **Verify phase 7:** with real local traffic + ≥2 eval runs in the DB: all four screens render non-empty; label rollback from the UI changes the next request's version (re-run the phase-4 verify through the UI); drift chart shows the version-change annotation.
 

@@ -21,6 +21,19 @@ export interface PromptSummary extends StoredPrompt {
 	labels: Array<{ label: string; version: number }>;
 }
 
+/** Full read model for the admin prompt-detail screen. */
+export interface PromptDetail extends StoredPrompt {
+	created_at: string;
+	labels: Array<{ label: string; version: number; updated_at: string }>;
+	versions: Array<{
+		version: number;
+		messages_json: string;
+		variables_json: string;
+		notes: string | null;
+		created_at: string;
+	}>;
+}
+
 export interface StoredPromptVersion {
 	promptId: number;
 	version: number;
@@ -55,9 +68,17 @@ interface PromptSummaryRow extends PromptRow {
 	latest_version: number | null;
 }
 
+interface PromptDetailRow extends PromptRow {
+	created_at: string;
+}
+
 interface PromptLabelRow {
 	label: string;
 	version: number;
+}
+
+interface PromptDetailLabelRow extends PromptLabelRow {
+	updated_at: string;
 }
 
 interface VersionNumberRow {
@@ -70,6 +91,10 @@ interface VersionRow {
 	messages_json: string;
 	variables_json: string;
 	notes: string | null;
+}
+
+interface PromptDetailVersionRow extends Omit<VersionRow, "prompt_id"> {
+	created_at: string;
 }
 
 interface LabelVersionRow {
@@ -140,6 +165,53 @@ export function listPromptSummaries(db: Database.Database): PromptSummary[] {
 		...prompt,
 		labels: labelsForPrompt.all(prompt.id) as PromptLabelRow[],
 	}));
+}
+
+/**
+ * Reads one prompt together with its current labels and append-only versions.
+ * JSON payloads intentionally remain text here so the HTTP boundary can parse
+ * the complete result before it sends anything to a caller.
+ */
+export function findPromptDetail(
+	db: Database.Database,
+	slug: string,
+): PromptDetail | null {
+	const prompt = db
+		.prepare(
+			`SELECT id, slug, description, created_at
+			 FROM prompts
+			 WHERE slug = ?`,
+		)
+		.get(slug) as PromptDetailRow | undefined;
+	if (!prompt) {
+		return null;
+	}
+
+	const labels = db
+		.prepare(
+			`SELECT label, version, updated_at
+			 FROM prompt_labels
+			 WHERE prompt_id = ?
+			 ORDER BY label ASC`,
+		)
+		.all(prompt.id) as PromptDetailLabelRow[];
+	const versions = db
+		.prepare(
+			`SELECT version, messages_json, variables_json, notes, created_at
+			 FROM prompt_versions
+			 WHERE prompt_id = ?
+			 ORDER BY version ASC`,
+		)
+		.all(prompt.id) as PromptDetailVersionRow[];
+
+	return {
+		id: prompt.id,
+		slug: prompt.slug,
+		description: prompt.description,
+		created_at: prompt.created_at,
+		labels,
+		versions,
+	};
 }
 
 /**

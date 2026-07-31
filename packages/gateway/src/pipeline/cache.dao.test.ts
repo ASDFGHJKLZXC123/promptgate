@@ -89,6 +89,8 @@ test("returns stored response JSON unchanged with separate authoritative usage",
 	expect(hit).toEqual({
 		response: responseWithoutUsage,
 		usage,
+		pricedCostMicroUsd: 9,
+		pricedCostEstimated: null,
 	});
 	expect(hitCount()).toEqual({ hit_count: 1, last_hit_at: expect.any(String) });
 });
@@ -116,6 +118,29 @@ test("treats corrupt response or usage JSON as a miss without incrementing", () 
 		JSON.stringify({ prompt_tokens: 1 }),
 		"cache-hash",
 	);
+	expect(
+		findAndRecordCacheHit(db, { hash: "cache-hash", model: "gpt-cache" }),
+	).toBeNull();
+	expect(hitCount()).toEqual({ hit_count: 0, last_hit_at: null });
+});
+
+test("treats corrupt saved-cost provenance as a miss without incrementing", () => {
+	seedEntry();
+	db.pragma("ignore_check_constraints = ON");
+	db.prepare(
+		"UPDATE cache_entries SET priced_cost_micro_usd = -1 WHERE hash = ?",
+	).run("cache-hash");
+	db.pragma("ignore_check_constraints = OFF");
+	expect(
+		findAndRecordCacheHit(db, { hash: "cache-hash", model: "gpt-cache" }),
+	).toBeNull();
+	expect(hitCount()).toEqual({ hit_count: 0, last_hit_at: null });
+
+	db.pragma("ignore_check_constraints = ON");
+	db.prepare(
+		"UPDATE cache_entries SET priced_cost_micro_usd = 9, priced_cost_estimated = 2 WHERE hash = ?",
+	).run("cache-hash");
+	db.pragma("ignore_check_constraints = OFF");
 	expect(
 		findAndRecordCacheHit(db, { hash: "cache-hash", model: "gpt-cache" }),
 	).toBeNull();
@@ -164,12 +189,18 @@ test("stores a missing provider usage as JSON null and excludes it only from str
 		response: responseWithoutUsage,
 		usage: null,
 		pricedCostMicroUsd: 12,
+		pricedCostEstimated: false,
 		ttlHours: 1,
 	});
 
 	expect(
 		findAndRecordCacheHit(db, { hash: "cache-hash", model: "gpt-cache" }),
-	).toEqual({ response: responseWithoutUsage, usage: null });
+	).toEqual({
+		response: responseWithoutUsage,
+		usage: null,
+		pricedCostMicroUsd: 12,
+		pricedCostEstimated: false,
+	});
 	expect(
 		findAndRecordCacheHit(db, {
 			hash: "cache-hash",
@@ -187,6 +218,7 @@ test("upsert refreshes the exact entry and hourly sweep only removes expired row
 		response,
 		usage,
 		pricedCostMicroUsd: 9,
+		pricedCostEstimated: false,
 		ttlHours: 1,
 	});
 	seedEntry({ hash: "expired-hash", expiresAt: "2000-01-01 00:00:00" });
@@ -201,15 +233,21 @@ test("upsert refreshes the exact entry and hourly sweep only removes expired row
 		response,
 		usage,
 		pricedCostMicroUsd: 11,
+		pricedCostEstimated: true,
 		ttlHours: 2,
 	});
 	expect(
 		db
 			.prepare(
-				"SELECT priced_cost_micro_usd, hit_count, last_hit_at FROM cache_entries WHERE hash = ?",
+				"SELECT priced_cost_micro_usd, priced_cost_estimated, hit_count, last_hit_at FROM cache_entries WHERE hash = ?",
 			)
 			.get("cache-hash"),
-	).toEqual({ priced_cost_micro_usd: 11, hit_count: 0, last_hit_at: null });
+	).toEqual({
+		priced_cost_micro_usd: 11,
+		priced_cost_estimated: 1,
+		hit_count: 0,
+		last_hit_at: null,
+	});
 });
 
 test("rejects a non-integer or negative priced cache cost", () => {
@@ -221,6 +259,7 @@ test("rejects a non-integer or negative priced cache cost", () => {
 				response,
 				usage,
 				pricedCostMicroUsd,
+				pricedCostEstimated: false,
 				ttlHours: 1,
 			}),
 		).toThrow("nonnegative integer");

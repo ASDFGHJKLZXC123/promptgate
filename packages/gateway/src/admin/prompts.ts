@@ -9,6 +9,7 @@ import {
 	addVersion,
 	createPrompt,
 	findPromptBySlug,
+	findPromptDetail,
 	findPromptVersion,
 	type JsonValue,
 	listPromptSummaries,
@@ -158,6 +159,21 @@ function prettyMessages(json: string): string {
 	return `${JSON.stringify(sortJsonKeys(messages), null, 2)}\n`;
 }
 
+/** Parses a persisted JSON array without allowing a partial detail response. */
+function parseStoredJsonArray(json: string, column: string): JsonValue[] {
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(json);
+	} catch {
+		throw new Error(`Stored prompt ${column} is invalid JSON`);
+	}
+	const array = toJsonArray(parsed);
+	if (!array) {
+		throw new Error(`Stored prompt ${column} is not a JSON array`);
+	}
+	return array;
+}
+
 function promptNotFound(reply: FastifyReply): FastifyReply {
 	return sendError(reply, 404, "Prompt not found.", "prompt_not_found");
 }
@@ -198,6 +214,38 @@ export function registerPromptAdminRoutes(
 			}
 			throw error;
 		}
+	});
+
+	server.get("/api/prompts/:slug", (request, reply) => {
+		const params = parseOrReply(promptParamsSchema, request.params, reply);
+		if (!params) {
+			return reply;
+		}
+		const prompt = findPromptDetail(db, params.slug);
+		if (!prompt) {
+			return promptNotFound(reply);
+		}
+
+		return reply.send({
+			id: prompt.id,
+			slug: prompt.slug,
+			description: prompt.description,
+			created_at: prompt.created_at,
+			labels: prompt.labels,
+			versions: prompt.versions.map((version) => ({
+				version: version.version,
+				messages_json: parseStoredJsonArray(
+					version.messages_json,
+					"messages_json",
+				),
+				variables_json: parseStoredJsonArray(
+					version.variables_json,
+					"variables_json",
+				),
+				notes: version.notes,
+				created_at: version.created_at,
+			})),
+		});
 	});
 
 	server.post("/api/prompts/:slug/versions", async (request, reply) => {

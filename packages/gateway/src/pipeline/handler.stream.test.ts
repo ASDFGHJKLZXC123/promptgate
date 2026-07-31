@@ -34,6 +34,8 @@ interface RequestsRow {
 	output_tokens: number | null;
 	cost_micro_usd: number | null;
 	cost_estimated: number;
+	cache_saved_micro_usd: number | null;
+	cache_saved_estimated: number | null;
 	first_token_ms: number | null;
 	total_ms: number | null;
 	status: string;
@@ -422,12 +424,13 @@ describe("POST /v1/chat/completions — streaming success", () => {
 			expect(streamCalls).toBe(1);
 			const entry = db
 				.prepare(
-					"SELECT response_json, usage_json, priced_cost_micro_usd FROM cache_entries",
+					"SELECT response_json, usage_json, priced_cost_micro_usd, priced_cost_estimated FROM cache_entries",
 				)
 				.get() as {
 				response_json: string;
 				usage_json: string;
 				priced_cost_micro_usd: number;
+				priced_cost_estimated: number;
 			};
 			expect(JSON.parse(entry.response_json)).toEqual({
 				id: "c",
@@ -449,6 +452,7 @@ describe("POST /v1/chat/completions — streaming success", () => {
 				total_tokens: 6,
 			});
 			expect(entry.priced_cost_micro_usd).toBe(8);
+			expect(entry.priced_cost_estimated).toBe(0);
 
 			const replay = await server.inject({
 				method: "POST",
@@ -458,6 +462,15 @@ describe("POST /v1/chat/completions — streaming success", () => {
 			});
 			expect(replay.headers["x-pg-cache"]).toBe("hit");
 			expect(streamCalls).toBe(1);
+			const replayRow = await readRow(
+				db,
+				replay.headers["x-pg-request-id"] as string,
+			);
+			expect(replayRow).toMatchObject({
+				cache_hit: 1,
+				cache_saved_micro_usd: 8,
+				cache_saved_estimated: 0,
+			});
 			const payloads = await parseClientSse(replay.payload);
 			expect(payloads.at(-1)).toBe("[DONE]");
 			expect(JSON.parse(payloads[0] ?? "{}")).toMatchObject({
@@ -647,6 +660,8 @@ describe("POST /v1/chat/completions — streaming success", () => {
 				output_tokens: 3,
 				cost_micro_usd: 0,
 				cost_estimated: 0,
+				cache_saved_micro_usd: 42,
+				cache_saved_estimated: null,
 				status: "ok",
 			});
 			expect(db.prepare("SELECT hit_count FROM cache_entries").get()).toEqual({

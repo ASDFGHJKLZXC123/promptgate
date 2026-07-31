@@ -121,8 +121,8 @@ Build-time sources verified 2026-07-25: [Gemini OpenAI compatibility](https://ai
 - Key: `sha256` of the canonical JSON of the **complete forwarded request body** (post prompt-resolution), excluding only `stream`/`stream_options` (so streaming and non-streaming share entries) and the already-stripped `pg_*` fields. Never enumerate an allowlist of fields — any parameter that reaches the provider (`seed`, `n`, penalties, `logit_bias`, `tools`, …) can change the output and must change the key.
 - Opt-out per request: `pg_no_cache: true`. Persisted eval runs always set it (§7.2) — cached responses would mask provider drift.
 - Documented v1 behavior: caching applies even at `temperature > 0` (key includes temperature, so same-params requests get identical responses). This is a stated trade-off, not a bug; note it in README.
-- TTL from config (default 24h); `hit_count`/`last_hit_at` maintained for the dashboard's cache panel; periodic sweep deletes expired rows.
-- Cache hits still write a `requests` row with `cache_hit = 1` and `cost_micro_usd = 0` — cache savings must be visible in the dashboard. `cache_entries.priced_cost_micro_usd` stores what the original generation cost, so "$ saved" = `SUM(hit_count × priced_cost_micro_usd)` with no repricing at query time.
+- TTL from config (default 24h); `hit_count`/`last_hit_at` remain cache-entry operational metadata; periodic sweep deletes expired rows.
+- Cache hits still write a `requests` row with `cache_hit = 1` and `cost_micro_usd = 0` — actual budget/spend semantics do not change. The dashboard's financial source of truth is the immutable per-request `cache_saved_micro_usd` plus `cache_saved_estimated` provenance added by migration 006. Each new hit copies the cached generation's frozen priced cost and exact/estimated bit without repricing; each new non-hit records `0` and exact. Legacy hits stay visibly unknown because their time-local price and provenance cannot be reconstructed. Do not derive historical savings from mutable `cache_entries.hit_count`.
 
 ### 3.5 Metering & cost (deliverable 1's core)
 
@@ -304,11 +304,25 @@ CREATE TABLE eval_results (
   latency_ms INTEGER, cost_micro_usd INTEGER,
   PRIMARY KEY(run_id, case_id)           -- safe because a run is single-model
 );
+
+-- 006_dashboard_provenance.sql (human-approved Phase 7 step-4 Contract Amendment A)
+ALTER TABLE cache_entries ADD COLUMN priced_cost_estimated INTEGER
+  CHECK (priced_cost_estimated IS NULL OR priced_cost_estimated IN (0, 1));
+ALTER TABLE requests ADD COLUMN cache_saved_micro_usd INTEGER
+  CHECK (cache_saved_micro_usd IS NULL OR cache_saved_micro_usd >= 0);
+ALTER TABLE requests ADD COLUMN cache_saved_estimated INTEGER
+  CHECK (cache_saved_estimated IS NULL OR cache_saved_estimated IN (0, 1));
+
+-- Existing misses are known to have saved nothing; existing hits do not have
+-- enough immutable evidence to reconstruct their saved amount or provenance.
+UPDATE requests
+SET cache_saved_micro_usd = 0, cache_saved_estimated = 0
+WHERE cache_hit = 0;
 ```
 
 Aggregation semantics (so no two components compute them differently): `pass_rate = cases_passed / cases_total` where a case passes only if **all** its assertions pass; `score_avg` = arithmetic mean of `llm-rubric` scores across cases that have one (deterministic-only cases contribute to pass_rate, not score_avg).
 
-Retention: `requests` is append-only; a config-driven pruner (default: raw rows 90 days) writes `requests_daily` rollups before deleting — the drift dashboard needs long history but not raw rows.
+Retention: `requests` is append-only; the Phase 7 metrics endpoint reads retained raw rows only, for the default 90-day raw window. `requests_daily` is not an eligible source for this endpoint because its daily cells cannot reproduce hourly buckets, alternate ungrouped/grouped percentiles, exact-versus-estimated cost, or cache-savings provenance. A future pruner may write the current rollups before deleting, but the dashboard must expose only the retained raw window until a separately approved rollup extension can reproduce the contract truthfully; it must never silently combine or reinterpret incomplete rollups. Eval drift continues to read `eval_runs`, not request rollups.
 
 ---
 
@@ -337,15 +351,47 @@ GET    /admin/api/keys                 list + month-to-date spend per key
 PATCH  /admin/api/keys/:id             budget/rate-limit/disabled — server invalidates that key's budget memo (§3.5)
 GET    /admin/api/prompts              list with latest version + labels
 POST   /admin/api/prompts              {slug, description}
+GET    /admin/api/prompts/:slug        detail + current labels + immutable versions in ascending order
 POST   /admin/api/prompts/:slug/versions   {messages_json, variables_json, notes} → new immutable version
 GET    /admin/api/prompts/:slug/versions/:a/diff/:b   unified diff (server-side, line-based on pretty-printed messages)
 PUT    /admin/api/prompts/:slug/labels/:label          {version}   ← promote/rollback, writes label_history
-GET    /admin/api/metrics/timeseries   ?metric=cost|latency_p95|cache_rate|tokens&group=model|key|feature&from&to
+GET    /admin/api/metrics/timeseries   ?metric=cost|request_count|latency_p50|latency_p95|cache_rate|cache_saved|tokens&group=none|model|key|feature&from&to
 POST   /admin/api/evals/datasets       upsert by slug: {slug, file_path, description} (pg-eval registers datasets here)
 POST   /admin/api/evals/runs           run + results payload from pg-eval (CLI never touches the DB file directly)
 GET    /admin/api/evals/runs           ?dataset=&prompt_ref=&model=&limit=   (drift chart + baseline lookup)
 GET    /admin/api/evals/runs/:id       run + per-case results
 ```
+
+`GET /admin/api/prompts/:slug` returns prompt metadata, current labels as `{label, version, updated_at}`, and immutable versions ordered ascending as `{version, messages_json, variables_json, notes, created_at}`. The two JSON fields are parsed arrays in the response; the list endpoint remains summary-only, the diff remains `text/plain`, and label-history storage is unchanged.
+
+The metrics endpoint has one fixed contract:
+
+```json
+{
+  "metric": "cost",
+  "unit": "micro_usd",
+  "interval": "hour",
+  "group_by": "model",
+  "points": [
+    {
+      "bucket_start": "2026-07-30T18:00:00Z",
+      "group_value": "gpt-5.6-terra",
+      "value": 1250,
+      "exact_value": 1000,
+      "estimated_value": 250,
+      "unknown_count": 0
+    }
+  ]
+}
+```
+
+- `metric` is required. `group` defaults to `none`. `from` and `to` are optional RFC3339 timestamps normalized to UTC; the interval is `[from, to)`, and `from` must precede `to`. Invalid timestamps or enum values use the existing 400 `invalid_request_error` envelope.
+- Units are `micro_usd`, `count`, `ms`, `ratio`, or `tokens`. `exact_value` and `estimated_value` are populated only for `cost` and `cache_saved`; they are `null` for every other metric.
+- Every series comes from durable raw `requests` rows in UTC hourly buckets. Missing hours are not zero-filled; an empty selection returns `points: []`. Points sort by `bucket_start`, then `group_value`.
+- `group_value` is `null` for `none`, the request model for `model`, the immutable API-key name for `key`, and the raw feature (including `null` for untagged traffic) for `feature`. Route input selects only server-owned whitelisted SQL fragments.
+- `cost` sums known request cost and splits it by `cost_estimated`; `value` is the known exact-plus-estimated subtotal. `request_count` counts every durable row. `latency_p50` and `latency_p95` use deterministic nearest-rank `ceil(q × N)` over non-null `total_ms` from every status, tie-broken by request row identity. `cache_rate` is cache hits divided by all durable rows. `tokens` sums rows with both input and output counts.
+- `cache_saved` sums the frozen per-hit saved cost, split by saved-cost provenance. If any selected hit has an unknown saved amount or exact/estimated bit, its bucket's `value` is `null`; known exact and estimated subtotals remain visible.
+- `unknown_count` counts rows excluded because the selected measurement or its required provenance is absent; it is zero for fully known buckets. A nonzero count marks `cost` and token totals as known subtotals, latency as a percentile over known samples, and cache savings as an unknown total rather than silently treating legacy data as zero.
 
 `pg-eval` therefore needs **two** credentials: a gateway key (`--key`) for eval traffic and the admin token (`--admin-token` / `PG_ADMIN_TOKEN` env) for dataset registration and run persistence.
 
@@ -532,9 +578,11 @@ Single-page app served at `/`, reading only `/admin/api/*`. Four screens:
 | **Overview** | spend over time (stacked by model); requests + p50/p95 latency; cache hit-rate + "$ saved"; budget burn bars per key (MTD vs budget) |
 | **Cost explorer** | group-by toggle: model / key / feature (`pg_feature` → FinOps deliverable); estimated-vs-exact cost split |
 | **Prompts** | list → version history → side-by-side unified diff → label promote/rollback buttons (writes via admin API) |
-| **Quality drift** | `eval_runs` score/pass-rate over time per dataset, x-axis annotated with prompt-version changes and model changes (both derivable from run rows) — this chart *is* the "quality drift" headline |
+| **Quality drift** | `eval_runs` score/pass-rate over time, partitioned by immutable `dataset_hash`, with x-axis annotations for prompt-version and model changes (both derivable from run rows) — this chart *is* the "quality drift" headline |
 
 Auth: the dashboard prompts for the admin token once, keeps it in memory (not localStorage), sends it as header. Fine for single-tenant self-hosted.
+
+Quality Drift must not connect or compare points across different dataset hashes. The current eval schema intentionally remains unchanged under Contract Amendment A, so historical judge provenance is unavailable; the screen must disclose that limitation and must not imply a target prompt/model caused a score change that could instead reflect a judge change.
 
 ---
 
