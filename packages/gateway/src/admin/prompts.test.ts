@@ -32,6 +32,18 @@ interface VersionResponse {
 	notes: string | null;
 }
 
+interface PromptDetailResponse extends PromptResponse {
+	created_at: string;
+	labels: Array<{ label: string; version: number; updated_at: string }>;
+	versions: Array<{
+		version: number;
+		messages_json: unknown[];
+		variables_json: unknown[];
+		notes: string | null;
+		created_at: string;
+	}>;
+}
+
 let tempDbDir: string | undefined;
 let previousDbPath: string | undefined;
 let previousAdminToken: string | undefined;
@@ -158,6 +170,155 @@ describe("admin prompt registry API", () => {
 			expect(prompts[0]).toMatchObject({ latest_version: null, labels: [] });
 			expect(prompts[0]?.created_at).toEqual(expect.any(String));
 		} finally {
+			await server.close();
+		}
+	});
+
+	test("reads complete prompt detail with parsed ascending versions and label timestamps", async () => {
+		const server = await buildTestServer();
+		const db = openTestDb();
+		try {
+			const created = await createPrompt(server, "greet");
+			const prompt = created.json() as PromptResponse;
+			const first = await server.inject({
+				method: "POST",
+				url: "/admin/api/prompts/greet/versions",
+				headers: adminHeaders(),
+				body: JSON.stringify(versionBody),
+			});
+			const second = await server.inject({
+				method: "POST",
+				url: "/admin/api/prompts/greet/versions",
+				headers: adminHeaders(),
+				body: JSON.stringify({
+					...versionBody,
+					messages_json: [{ role: "system", content: "Hello again {{name}}" }],
+					variables_json: [{ name: "name", required: false }],
+					notes: null,
+				}),
+			});
+			expect(first.statusCode).toBe(200);
+			expect(second.statusCode).toBe(200);
+			for (const [label, version] of [
+				["prod", 2],
+				["candidate", 1],
+			] as const) {
+				const labeled = await server.inject({
+					method: "PUT",
+					url: `/admin/api/prompts/greet/labels/${label}`,
+					headers: adminHeaders(),
+					body: JSON.stringify({ version }),
+				});
+				expect(labeled.statusCode).toBe(200);
+			}
+			db.prepare(
+				"UPDATE prompt_labels SET updated_at = '2026-07-30 12:34:56' WHERE prompt_id = ? AND label = 'prod'",
+			).run(prompt.id);
+
+			const detail = await server.inject({
+				method: "GET",
+				url: "/admin/api/prompts/greet",
+				headers: adminHeaders(),
+			});
+			const unauthenticated = await server.inject({
+				method: "GET",
+				url: "/admin/api/prompts/greet",
+			});
+			const response = detail.json() as PromptDetailResponse;
+
+			expect(detail.statusCode).toBe(200);
+			expect(response).toEqual({
+				id: prompt.id,
+				slug: "greet",
+				description: "greet description",
+				created_at: expect.any(String),
+				labels: [
+					{
+						label: "candidate",
+						version: 1,
+						updated_at: expect.any(String),
+					},
+					{
+						label: "prod",
+						version: 2,
+						updated_at: "2026-07-30 12:34:56",
+					},
+				],
+				versions: [
+					{
+						version: 1,
+						messages_json: versionBody.messages_json,
+						variables_json: versionBody.variables_json,
+						notes: "Initial version",
+						created_at: expect.any(String),
+					},
+					{
+						version: 2,
+						messages_json: [
+							{ role: "system", content: "Hello again {{name}}" },
+						],
+						variables_json: [{ name: "name", required: false }],
+						notes: null,
+						created_at: expect.any(String),
+					},
+				],
+			});
+			expect(unauthenticated.statusCode).toBe(401);
+			expect(unauthenticated.json()).toMatchObject({
+				error: { code: "invalid_admin_token" },
+			});
+		} finally {
+			db.close();
+			await server.close();
+		}
+	});
+
+	test("uses safe errors for a missing prompt and corrupted persisted detail JSON", async () => {
+		const server = await buildTestServer();
+		const db = openTestDb();
+		try {
+			const missing = await server.inject({
+				method: "GET",
+				url: "/admin/api/prompts/missing",
+				headers: adminHeaders(),
+			});
+			expect(missing.statusCode).toBe(404);
+			expect(missing.json()).toEqual({
+				error: {
+					message: "Prompt not found.",
+					type: "invalid_request_error",
+					code: "prompt_not_found",
+				},
+			});
+
+			await createPrompt(server, "corrupt");
+			const added = await server.inject({
+				method: "POST",
+				url: "/admin/api/prompts/corrupt/versions",
+				headers: adminHeaders(),
+				body: JSON.stringify(versionBody),
+			});
+			expect(added.statusCode).toBe(200);
+			db.exec("DROP TRIGGER prompt_versions_immutable");
+			db.prepare(
+				"UPDATE prompt_versions SET messages_json = 'not-json' WHERE version = 1",
+			).run();
+
+			const corrupt = await server.inject({
+				method: "GET",
+				url: "/admin/api/prompts/corrupt",
+				headers: adminHeaders(),
+			});
+			expect(corrupt.statusCode).toBe(500);
+			expect(corrupt.json()).toEqual({
+				error: {
+					message: "Internal server error.",
+					type: "server_error",
+					code: "internal_error",
+				},
+			});
+		} finally {
+			db.close();
 			await server.close();
 		}
 	});

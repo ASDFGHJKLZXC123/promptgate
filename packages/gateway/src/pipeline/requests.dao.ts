@@ -38,6 +38,8 @@ export interface InsertRequestLogInput {
 	outputTokens?: number | null;
 	costMicroUsd?: number | null;
 	costEstimated: boolean;
+	cacheSavedMicroUsd?: number | null;
+	cacheSavedEstimated?: boolean | null;
 	firstTokenMs?: number | null;
 	totalMs: number;
 	status: RequestLogStatus;
@@ -134,12 +136,12 @@ export function insertRequestLog(
 			request_id, api_key_id, provider, model, prompt_id, prompt_version, feature,
 			cache_hit, streamed, input_tokens, output_tokens,
 			cost_micro_usd, cost_estimated, first_token_ms, total_ms,
-			status, error_code
+			cache_saved_micro_usd, cache_saved_estimated, status, error_code
 		) VALUES (
 			@request_id, @api_key_id, @provider, @model, @prompt_id, @prompt_version, @feature,
 			@cache_hit, @streamed, @input_tokens, @output_tokens,
 			@cost_micro_usd, @cost_estimated, @first_token_ms, @total_ms,
-			@status, @error_code
+			@cache_saved_micro_usd, @cache_saved_estimated, @status, @error_code
 		)
 	`).run({
 		request_id: requestId,
@@ -155,6 +157,13 @@ export function insertRequestLog(
 		output_tokens: input.outputTokens ?? null,
 		cost_micro_usd: input.costMicroUsd ?? null,
 		cost_estimated: input.costEstimated ? 1 : 0,
+		cache_saved_micro_usd: input.cacheSavedMicroUsd ?? 0,
+		cache_saved_estimated:
+			input.cacheSavedEstimated === null
+				? null
+				: (input.cacheSavedEstimated ?? false)
+					? 1
+					: 0,
 		first_token_ms: input.firstTokenMs ?? null,
 		total_ms: input.totalMs,
 		status: input.status,

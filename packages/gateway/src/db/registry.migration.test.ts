@@ -161,6 +161,7 @@ test("upgrades a database through migration 005 while preserving existing rows",
 		{ name: "003_provider_pricing.sql" },
 		{ name: "004_registry.sql" },
 		{ name: "005_evals.sql" },
+		{ name: "006_dashboard_provenance.sql" },
 	]);
 	expect(
 		db

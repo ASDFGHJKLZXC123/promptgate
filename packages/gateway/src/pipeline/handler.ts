@@ -82,6 +82,8 @@ interface PendingRequestLog {
 	outputTokens?: number | null;
 	costMicroUsd?: number | null;
 	costEstimated: boolean;
+	cacheSavedMicroUsd?: number | null;
+	cacheSavedEstimated?: boolean | null;
 	firstTokenMs?: number | null;
 	status: RequestLogStatus;
 	errorCode?: string | null;
@@ -293,6 +295,8 @@ async function logRequest(
 			outputTokens: log.outputTokens,
 			costMicroUsd: log.costMicroUsd,
 			costEstimated: log.costEstimated,
+			cacheSavedMicroUsd: log.cacheSavedMicroUsd,
+			cacheSavedEstimated: log.cacheSavedEstimated,
 			firstTokenMs: log.firstTokenMs,
 			totalMs,
 			status: log.status,
@@ -388,6 +392,8 @@ function sendCacheHit(
 	log.outputTokens = normalizedUsage.outputTokens;
 	log.costMicroUsd = 0;
 	log.costEstimated = normalizedUsage.costEstimated;
+	log.cacheSavedMicroUsd = hit.pricedCostMicroUsd;
+	log.cacheSavedEstimated = hit.pricedCostEstimated;
 	log.status = "ok";
 	reply.header("x-pg-cache", "hit");
 	reply.header("x-pg-cost-usd", "0.000000");
@@ -619,6 +625,7 @@ async function* streamFrames(
 					response: assembled,
 					usage,
 					pricedCostMicroUsd: pricedCost,
+					pricedCostEstimated: log.costEstimated,
 					ttlHours: config.CACHE_TTL_HOURS,
 				});
 			} catch (error) {
@@ -1086,6 +1093,7 @@ export function registerChatCompletionsRoute(
 						response,
 						usage: response.usage ?? null,
 						pricedCostMicroUsd: meter.costMicroUsd,
+						pricedCostEstimated: meter.costEstimated,
 						ttlHours: config.CACHE_TTL_HOURS,
 					});
 				} catch (error) {

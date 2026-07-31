@@ -6,7 +6,13 @@ import { afterEach, beforeEach, describe, expect, test } from "vitest";
 
 import { openDatabase } from "../db/index.js";
 import { migrate } from "../db/migrate.js";
-import { addVersion, createPrompt, resolveRef, setLabel } from "./dao.js";
+import {
+	addVersion,
+	createPrompt,
+	findPromptDetail,
+	resolveRef,
+	setLabel,
+} from "./dao.js";
 
 let tempDbDir: string;
 let db: Database.Database;
@@ -111,6 +117,67 @@ describe("prompt registry DAO", () => {
 			messages_json: JSON.stringify(storedMessages),
 			variables_json: JSON.stringify(storedVariables),
 		});
+	});
+
+	test("reads prompt detail with sorted labels and ascending immutable versions", () => {
+		const prompt = createPrompt(db, "detail", "Detail description");
+		addVersion(
+			db,
+			prompt.id,
+			[{ role: "system", content: "first" }],
+			variables,
+			"first note",
+		);
+		addVersion(
+			db,
+			prompt.id,
+			[{ role: "system", content: "second" }],
+			variables,
+			null,
+		);
+		setLabel(db, prompt.id, "prod", 2);
+		setLabel(db, prompt.id, "candidate", 1);
+		db.prepare(
+			"UPDATE prompt_labels SET updated_at = '2026-07-30 12:34:56' WHERE prompt_id = ? AND label = 'prod'",
+		).run(prompt.id);
+
+		expect(findPromptDetail(db, "detail")).toEqual({
+			id: prompt.id,
+			slug: "detail",
+			description: "Detail description",
+			created_at: expect.any(String),
+			labels: [
+				{
+					label: "candidate",
+					version: 1,
+					updated_at: expect.any(String),
+				},
+				{
+					label: "prod",
+					version: 2,
+					updated_at: "2026-07-30 12:34:56",
+				},
+			],
+			versions: [
+				{
+					version: 1,
+					messages_json: JSON.stringify([{ role: "system", content: "first" }]),
+					variables_json: JSON.stringify(variables),
+					notes: "first note",
+					created_at: expect.any(String),
+				},
+				{
+					version: 2,
+					messages_json: JSON.stringify([
+						{ role: "system", content: "second" },
+					]),
+					variables_json: JSON.stringify(variables),
+					notes: null,
+					created_at: expect.any(String),
+				},
+			],
+		});
+		expect(findPromptDetail(db, "missing")).toBeNull();
 	});
 
 	test("never provides a DAO path to mutate immutable version content", () => {
