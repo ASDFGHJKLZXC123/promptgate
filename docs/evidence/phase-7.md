@@ -2,8 +2,8 @@
 
 Date: 2026-07-30
 
-Status: **provider-free end-to-end Verify complete; awaiting explicit human
-Phase 7 approval**. The production dashboard bundle and gateway ran locally
+Status: **provider-free end-to-end Verify complete; human-approved on
+2026-07-30**. The production dashboard bundle and gateway ran locally
 against a fresh temporary database with injected deterministic adapters. No
 provider endpoint was reachable through those adapters, the evidence process
 started under an empty environment with all four provider-key variables
@@ -159,5 +159,7 @@ all horizontally scrollable columns at once.
 | No provider calls; provider-key variables absent under the value-blind launch guard; no persistent project-data mutation | pass |
 | Temporary gateway/forwarder stopped gracefully; durable assertions opened the temporary database read-only | pass |
 
-There is no remaining Phase 7 Verify blocker. Publication still requires the
-normal full repository gate and the single protected Phase 7 pull request.
+There is no remaining Phase 7 Verify blocker. The project owner approved Phase
+7 after the initial protected PR #12 checks passed at exact head `346c233`; the
+approval-only record must now pass its refreshed checks before that PR is
+merged.
