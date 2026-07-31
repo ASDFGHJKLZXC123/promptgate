@@ -12,6 +12,7 @@
 		"dev": "tsx watch src/index.ts"
 	},
 	"dependencies": {
+		"@fastify/static": "^10.1.2",
 		"@promptgate/shared": "workspace:*",
 		"better-sqlite3": "^12.11.1",
 		"diff": "^9.0.0",

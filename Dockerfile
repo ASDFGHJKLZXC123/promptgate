@@ -23,10 +23,12 @@ RUN pnpm build \
 FROM node:22-slim AS runtime
 
 ENV NODE_ENV=production
+ENV DASHBOARD_DIST_PATH=/app/dashboard
 
 WORKDIR /app
 
 COPY --from=build /opt/promptgate-gateway ./
+COPY --from=build /app/packages/dashboard/dist /app/dashboard
 
 EXPOSE 8787
 
