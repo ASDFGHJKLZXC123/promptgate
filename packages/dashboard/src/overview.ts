@@ -2,15 +2,15 @@ import { Chart, type ChartConfiguration, type ChartType } from "chart.js";
 
 import { api } from "./api";
 
-type MetricName =
+export type MetricName =
 	| "cost"
 	| "request_count"
 	| "latency_p50"
 	| "latency_p95"
 	| "cache_rate"
 	| "cache_saved";
-type MetricUnit = "micro_usd" | "count" | "ms" | "ratio" | "tokens";
-type MetricGroup = "none" | "model" | "key" | "feature";
+export type MetricUnit = "micro_usd" | "count" | "ms" | "ratio" | "tokens";
+export type MetricGroup = "none" | "model" | "key" | "feature";
 
 export interface MetricsPoint {
 	bucket_start: string;
@@ -75,6 +75,14 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null;
 }
 
+function hasExactKeys(value: Record<string, unknown>, keys: string[]): boolean {
+	const actual = Object.keys(value).sort();
+	return (
+		actual.length === keys.length &&
+		actual.every((key, index) => key === keys[index])
+	);
+}
+
 function isSafeNonnegativeInteger(value: unknown): value is number {
 	return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
 }
@@ -126,6 +134,18 @@ function parsePoint(
 	group: MetricGroup,
 ): MetricsPoint {
 	if (!isRecord(value)) invalidResponse();
+	if (
+		!hasExactKeys(value, [
+			"bucket_start",
+			"estimated_value",
+			"exact_value",
+			"group_value",
+			"unknown_count",
+			"value",
+		])
+	) {
+		invalidResponse();
+	}
 	const {
 		bucket_start,
 		group_value,
@@ -206,6 +226,13 @@ export function parseMetricsResponse(
 ): MetricsResponse {
 	if (
 		!isRecord(value) ||
+		!hasExactKeys(value, [
+			"group_by",
+			"interval",
+			"metric",
+			"points",
+			"unit",
+		]) ||
 		value.metric !== metric ||
 		value.unit !== units[metric] ||
 		value.interval !== "hour" ||
@@ -213,12 +240,27 @@ export function parseMetricsResponse(
 		!Array.isArray(value.points)
 	)
 		invalidResponse();
+	const points = value.points.map((point) => parsePoint(point, metric, group));
+	const pointGroupsByBucket = new Map<string, Set<string | null>>();
+	for (let index = 1; index < points.length; index += 1) {
+		const previous = points[index - 1];
+		const current = points[index];
+		if (!previous || !current) invalidResponse();
+		if (previous.bucket_start > current.bucket_start) invalidResponse();
+	}
+	for (const point of points) {
+		const groupsForBucket =
+			pointGroupsByBucket.get(point.bucket_start) ?? new Set();
+		if (groupsForBucket.has(point.group_value)) invalidResponse();
+		groupsForBucket.add(point.group_value);
+		pointGroupsByBucket.set(point.bucket_start, groupsForBucket);
+	}
 	return {
 		metric,
 		unit: units[metric],
 		interval: "hour",
 		group_by: group,
-		points: value.points.map((point) => parsePoint(point, metric, group)),
+		points,
 	};
 }
 

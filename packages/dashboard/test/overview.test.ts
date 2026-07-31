@@ -273,6 +273,48 @@ describe("overview data helpers", () => {
 		).not.toContain(dangerousName);
 	});
 
+	test("rejects extra fields, duplicate points, and unordered metric points", () => {
+		const base = {
+			metric: "cost",
+			unit: "micro_usd",
+			interval: "hour",
+			group_by: "model",
+			points: [
+				{
+					bucket_start: hours[0],
+					group_value: "a",
+					value: 1,
+					exact_value: 1,
+					estimated_value: 0,
+					unknown_count: 0,
+				},
+			],
+		};
+		expect(() =>
+			parseMetricsResponse({ ...base, ignored: true }, "cost", "model"),
+		).toThrow("invalid dashboard response");
+		expect(() =>
+			parseMetricsResponse(
+				{ ...base, points: [...base.points, { ...base.points[0] }] },
+				"cost",
+				"model",
+			),
+		).toThrow("invalid dashboard response");
+		expect(() =>
+			parseMetricsResponse(
+				{
+					...base,
+					points: [
+						{ ...base.points[0], bucket_start: hours[1] },
+						base.points[0],
+					],
+				},
+				"cost",
+				"model",
+			),
+		).toThrow("invalid dashboard response");
+	});
+
 	test("accepts a zero-budget key without inventing a progress range", () => {
 		const [zeroBudgetKey] = parseKeysResponse([
 			{

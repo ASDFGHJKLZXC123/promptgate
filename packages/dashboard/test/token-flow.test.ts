@@ -141,6 +141,23 @@ describe("dashboard admin-token flow", () => {
 		).toBe("replacement");
 	});
 
+	test("preserves a Cost Explorer group's fixed snapshot URL across its 401 retry", async () => {
+		const prompt = vi.mocked(window.prompt);
+		const fetch = vi.mocked(globalThis.fetch);
+		prompt.mockReturnValueOnce("expired").mockReturnValueOnce("replacement");
+		fetch
+			.mockResolvedValueOnce(response(401))
+			.mockResolvedValueOnce(response(200));
+		const { api } = await import("../src/api");
+		const path =
+			"/admin/api/metrics/timeseries?metric=cost&group=feature&to=2026-07-01T09%3A00%3A00.000Z";
+		await api(path);
+		expect(fetch.mock.calls.map(([requestedPath]) => requestedPath)).toEqual([
+			path,
+			path,
+		]);
+	});
+
 	test("returns a second unauthorized response without another prompt or retry", async () => {
 		const prompt = vi.mocked(window.prompt);
 		const fetch = vi.mocked(globalThis.fetch);
@@ -257,5 +274,20 @@ describe("dashboard admin-token flow", () => {
 
 		expect(renderIndex).toBeGreaterThan(-1);
 		expect(initializeIndex).toBeGreaterThan(renderIndex);
+	});
+
+	test("the hash router disposes exactly the active screen before back-forward navigation and moves focus", async () => {
+		const source = await readFile(
+			new URL("../src/main.ts", import.meta.url),
+			"utf8",
+		);
+		expect(source).toContain("let disposeActiveScreen");
+		expect(source).toContain("disposeActiveScreen();");
+		expect(source).toContain(
+			'window.addEventListener("hashchange", () => renderRoute(true))',
+		);
+		expect(source).toContain(
+			'querySelector<HTMLElement>("#dashboard-content")?.focus()',
+		);
 	});
 });
