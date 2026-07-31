@@ -1,0 +1,260 @@
+PromptGate Phase 7 provider-free verification transcript
+Date: 2026-07-30 (America/Los_Angeles)
+Branch: codex/phase7-screens
+Verified dashboard commit: d6b98f36a20a12f65f82a2567ad4e3306be5307f
+
+Scope and redaction
+-------------------
+This is the retained, sanitized transcript for the disposable Phase 7
+verification database. <repo> means the repository root and <temp-dir> means
+the disposable verification directory. <redacted> replaces only the
+ephemeral PromptGate admin token or API-key plaintext. No provider-key value
+was present, printed, copied, or required.
+
+The evidence gateway used the real built gateway/dashboard and a temporary
+copy of the deterministic adapter harness. The same adapter behavior, plus
+the fail-closed provider-variable guard exercised after shutdown, is retained
+at:
+
+  docs/evidence/phase-7/provider-free-server.mjs
+
+The browser-only loopback token forwarder was:
+
+  docs/evidence/phase-7/browser-token-proxy.mjs
+
+Sanitized launch and setup commands
+-----------------------------------
+The main evidence process was launched with an empty environment plus the
+explicit non-secret variables below. In particular, no provider-key variable
+was inherited:
+
+  env -i \
+    PATH=<node-bin>:/usr/bin:/bin \
+    PORT=8787 \
+    DB_PATH=<temp-dir>/promptgate.db \
+    ADMIN_TOKEN=<redacted> \
+    DASHBOARD_DIST_PATH=<repo>/packages/dashboard/dist \
+    node <temp-dir>/verify-server.mjs
+
+The real pricing seed and CI fixture seed populated only the disposable
+database:
+
+  node <repo>/packages/gateway/dist/scripts/seed-pricing.js \
+    --db-path <temp-dir>/promptgate.db
+
+  PG_GATEWAY_URL=http://127.0.0.1:8787 \
+  PG_ADMIN_TOKEN=<redacted> \
+  PG_EVAL_KEY_FILE=<temp-dir>/ci-evals.key \
+    <repo>/node_modules/.bin/pg-eval seed-ci
+
+The provider-free dataset was run once while @prod resolved to v2 and once
+after the confirmation-gated Prompts UI rollback resolved it to v1:
+
+  GITHUB_SHA=d6b98f36a20a12f65f82a2567ad4e3306be5307f \
+    <repo>/node_modules/.bin/pg-eval run \
+    --dataset <repo>/docs/evidence/phase-7/provider-free-dataset.yaml \
+    --prompt safety_screen@prod \
+    --gateway http://127.0.0.1:8787 \
+    --key <redacted> \
+    --admin-token <redacted>
+
+Dataset byte identity
+---------------------
+Command:
+
+  shasum -a 256 \
+    docs/evidence/phase-7/provider-free-dataset.yaml \
+    <temp-dir>/phase7-provider-free.yaml
+  cmp -s \
+    docs/evidence/phase-7/provider-free-dataset.yaml \
+    <temp-dir>/phase7-provider-free.yaml
+
+Exact output:
+
+  c8e0904b9335dada3720c5b0342834611375324fd45b6e7590c58b1ad4164d0e  docs/evidence/phase-7/provider-free-dataset.yaml
+  c8e0904b9335dada3720c5b0342834611375324fd45b6e7590c58b1ad4164d0e  <temp-dir>/phase7-provider-free.yaml
+  dataset bytes: identical
+
+The same SHA-256 is the durable dataset_hash on both eval_runs rows.
+
+Pre-rollback v2 eval output
+---------------------------
+  | case | model | pass | score | first failed detail |
+  |---|---|---|---|---|
+  | urgent_chest_pain | deepseek-v4-flash | fail |  | Expected output to contain "\"risk_level\":\"urgent\"". |
+  | benign_recovered | deepseek-v4-flash | pass | 0.9 |  |
+
+Post-rollback v1 eval output
+----------------------------
+  | case | model | pass | score | first failed detail |
+  |---|---|---|---|---|
+  | urgent_chest_pain | deepseek-v4-flash | pass | 0.9 |  |
+  | benign_recovered | deepseek-v4-flash | pass | 0.9 |  |
+
+Controlled traffic assertions
+-----------------------------
+These values were parsed from the retained response headers and JSON bodies:
+
+  pre-rollback=200
+  cache-first=200
+  cache-second=200
+  estimated=200
+  rejected=400
+  post-rollback=200
+  pre-rollback-risk=none
+  post-rollback-risk=urgent
+  cache-first=miss
+  cache-second=hit
+  rejected-code=prompt_var_missing
+
+Browser/UI assertions
+---------------------
+The Prompts UI itself performed the final v2 -> v1 move. Its refreshed DOM
+contained:
+
+  Rolled back @prod from version 2 to version 1. The registry has been refreshed to confirm current state.
+
+  {
+    "rollbackStatus": true,
+    "prodV1": true,
+    "diff": true,
+    "action": true
+  }
+
+The expanded Quality screen assertion was:
+
+  {
+    "bodyHorizontalOverflow": false,
+    "changeVisible": true,
+    "loadedTwo": true,
+    "ratesVisible": true,
+    "rootHorizontalOverflow": false,
+    "sameDatasetHash": true,
+    "scoresVisible": true,
+    "tableRegionTabIndex": "0",
+    "url": "http://127.0.0.1:8788/#quality"
+  }
+
+Browser console output:
+
+  []
+
+Exact checked-in harness smoke after the evidence services stopped
+------------------------------------------------------------------
+Command:
+
+  env -i \
+    PATH=<node-bin>:/usr/bin:/bin \
+    PORT=8789 \
+    DB_PATH=<temp-dir>/promptgate.db \
+    ADMIN_TOKEN=<redacted> \
+    DASHBOARD_DIST_PATH=<repo>/packages/dashboard/dist \
+    node <repo>/docs/evidence/phase-7/provider-free-server.mjs
+
+Exact startup output:
+
+  Provider-key variables absent: OPENAI_API_KEY, ANTHROPIC_API_KEY, GEMINI_API_KEY, DEEPSEEK_API_KEY.
+  Phase 7 provider-free verification gateway ready.
+
+Exact health output:
+
+  {"ok":true}
+
+The same harness was then given one dummy provider-key variable to prove the
+guard fails closed without reading or printing a value:
+
+  guard-exit=1
+  guard-message=Provider-free verification refuses provider-key variables: OPENAI_API_KEY
+
+After SIGINT:
+
+  8789: stopped
+  <temp-dir>/promptgate.db: 126976 bytes
+  no promptgate.db-wal or promptgate.db-shm file remained
+
+Post-shutdown read-only database output
+---------------------------------------
+The following was run only after ports 8787, 8788, and 8789 had stopped:
+
+  sqlite3 -readonly <temp-dir>/promptgate.db
+  PRAGMA query_only=ON;
+  PRAGMA integrity_check;
+
+Exact integrity output:
+
+  ok
+  foreign_key_check: ok
+
+Exact eval_runs rows:
+
+  id  ts                   dataset_hash                                                      prompt_version  prompt_ref          model              cases_total  cases_passed  score_avg  cost_micro_usd
+  --  -------------------  ----------------------------------------------------------------  --------------  ------------------  -----------------  -----------  ------------  ---------  --------------
+  1   2026-07-31 03:41:26  c8e0904b9335dada3720c5b0342834611375324fd45b6e7590c58b1ad4164d0e  2               safety_screen@prod  deepseek-v4-flash  2            1             0.9        273
+  2   2026-07-31 03:47:46  c8e0904b9335dada3720c5b0342834611375324fd45b6e7590c58b1ad4164d0e  1               safety_screen@prod  deepseek-v4-flash  2            2             0.9        528
+
+Exact feature-row assertions:
+
+  {
+      "rollback_versions": [
+          2,
+          1
+      ],
+      "paired_pass_rates": [
+          0.5,
+          1.0
+      ],
+      "paired_score_avgs": [
+          0.9,
+          0.9
+      ],
+      "eval_identity": {
+          "dataset_hash_count": 1,
+          "prompt_ref_count": 1,
+          "model_count": 1
+      },
+      "cache_rows": [
+          {
+              "cache_hit": 0,
+              "cost_micro_usd": 255,
+              "cost_estimated": 0,
+              "cache_saved_micro_usd": 0,
+              "cache_saved_estimated": 0
+          },
+          {
+              "cache_hit": 1,
+              "cost_micro_usd": 0,
+              "cost_estimated": 0,
+              "cache_saved_micro_usd": 255,
+              "cache_saved_estimated": 0
+          }
+      ],
+      "estimated_row": {
+          "cost_micro_usd": 87,
+          "cost_estimated": 1
+      },
+      "rejected_row": {
+          "status": "rejected_prompt",
+          "error_code": "prompt_var_missing",
+          "cost_micro_usd": null
+      },
+      "current_prod_version": 1,
+      "latest_prod_move": {
+          "from_version": 2,
+          "to_version": 1
+      }
+  }
+
+The retained label history also contains setup and screenshot-recapture moves.
+The last durable history row—not an assertion that only one move occurred—is:
+
+  id  slug           label  from_version  to_version  moved_at
+  --  -------------  -----  ------------  ----------  -------------------
+  7   safety_screen  prod   2             1           2026-07-31 04:10:50
+
+Evidence image hashes
+---------------------
+  c7f6fcfbcc15044491e739d42ffa29aa5cadb844583ab5eae6ed2da0d080c495  overview.jpg
+  a1f5ee389f4cd44385f37fa85e9139553ba4d16d0621bd7d6ce96798228d90bd  cost-explorer.jpg
+  d87a80cceaec97764ddc0398dfd11cd5f7508cf28629b1c310578f158321318c  prompts.jpg
+  1a365f5f944840680c493a3036096bb9c0e40a8cc2fb7bcc4fb0638f6edd2fa9  quality-drift.jpg
+  4225d03e68542dfbe5c5a59c7a7b93a6853b69f46c26a42c84dadc9ec1667458  quality-drift-table.jpg
