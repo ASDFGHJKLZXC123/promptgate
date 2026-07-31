@@ -1,5 +1,6 @@
 import { Chart, registerables } from "chart.js";
 
+import { initializeAdminToken } from "./api";
 import "./style.css";
 
 Chart.register(...registerables);
@@ -27,3 +28,5 @@ app.innerHTML = `
 		</section>
 	</main>
 `;
+
+initializeAdminToken();
