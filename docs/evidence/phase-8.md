@@ -2,8 +2,8 @@
 
 Date started: 2026-07-30
 
-Status: **in progress — step 2 complete; step 3 requires an owner-approved
-truthfulness/Verify amendment**.
+Status: **in progress — step 2 complete; Truthfulness and Verify Amendment A
+owner-approved; step 3 next**.
 
 ## Step 1 — persistent deployment and dogfood key
 
@@ -123,15 +123,15 @@ the selected model, one user message, `response_format: {"type":"json_object"}`,
 and optional sampling fields. The native Anthropic client is the separate path
 that sends tools, already resolved and implemented in Phase 2.
 
-The inspection also exposed an authority mismatch. The finished app's OpenAI
+The inspection exposed an authority mismatch in the then-current wording. The finished app's OpenAI
 Chat client uses a buffered string response and does not send `stream: true`.
 Its documented SSE endpoint replays progress events only after synchronous
-generation has completed; it is not provider-token streaming. Therefore Phase
-8 step 3 cannot truthfully claim a live token-streaming UX check as currently
-worded. Separately, Phase 8 has no literal final Verify block even though the
+generation has completed; it is not provider-token streaming. Before Amendment
+A, Phase 8 step 3 could not truthfully claim the live token-streaming UX check
+as then worded, and the phase had no literal final Verify block even though the
 orchestrator requires one for every phase.
 
-Before step 3, the owner must approve a narrow synchronized amendment that:
+The resulting narrow synchronized amendment:
 
 - verifies the existing buffered generation/progress UX without claiming
   provider-token streaming; and
@@ -139,7 +139,7 @@ Before step 3, the owner must approve a narrow synchronized amendment that:
   `web_builder_llm` rows, normal generate/edit success through PromptGate,
   registry `pg_prompt` use plus rollback proof, Overview/Drift screenshots and
   required figures, the scheduled contract result with missing credentials
-  named deferred, and README deliverable links.
+  named `SKIPPED`, and README deliverable links.
 
 ### Opus/max authority verdict
 
@@ -164,4 +164,54 @@ application. It recommended:
   window, dashboard screenshots/figures, rollback evidence, scheduled contract
   evidence, README links, and final owner approval.
 
-This is an advisory verdict, not authority to edit the playbook or guide.
+## Owner-approved Truthfulness and Verify Amendment A
+
+On 2026-07-31, the project owner explicitly approved Phase 8 Truthfulness and
+Verify Amendment A. `BUILD_PLAYBOOK.md`, `IMPLEMENTATION_GUIDE.md`,
+`PROGRESS.md`, and this evidence file are synchronized under that authority.
+The project idea remains unchanged.
+
+The approved contract:
+
+- verifies `web_builder_llm`'s existing buffered request/response plus
+  post-completion progress replay in normal generate/edit flows, without
+  claiming provider-token streaming or adding a new transport feature;
+- assigns live streaming and non-streaming adapter proof to
+  `contract-nightly.yml`;
+- reports every missing credential as a named `SKIPPED` provider, makes any
+  configured provider contract failure red, and makes zero configured
+  providers red;
+- requires the registry-backed `pg_prompt` call to be live before the
+  observation window starts;
+- requires at least seven consecutive calendar days with the registry-backed
+  path live and at least one real dogfood request on five of those days;
+- calculates cache dollars saved as the sum of retained
+  `cache_saved_micro_usd` over known cache-hit rows, with exact and estimated
+  sums separate and the count of excluded unknown legacy hits reported
+  separately;
+- calculates gateway p95 overhead as proxied p95 minus direct p95 with the same
+  model, prompt, sample size, and measurement window while excluding cache
+  hits;
+- proves rollback through a confirmed registry-label change and the next live
+  dogfood call/version; and
+- adds the literal final Verify block covering the healthy deployment and $5
+  key, resolved TODOs, buffered normal flows and rows, live `pg_prompt`,
+  observation evidence, screenshots and figures, a green schedule-triggered
+  contract run, README links, and final owner approval.
+
+### Amendment validation
+
+The synchronized amendment passed the repository gate:
+
+```text
+lint: 179 files checked
+tests: 67 files, 852 tests passed
+compose configuration: valid
+git diff check: clean
+```
+
+An independent read-only audit initially found stale guide TODO/risk wording,
+pre-amendment evidence written in the present tense, and a missing requirement
+to report the count of unknown legacy cache hits separately. Those findings
+were corrected. The fresh re-audit checked the complete diff against every
+approved Amendment A element and returned `APPROVE`.

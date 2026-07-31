@@ -189,7 +189,7 @@ Every executed call must return a correct response. Its row must be `status='ok'
 
 1. **Author contract fixtures first — no network (human-approved fixture-timing amendment, 2026-07-25).** Before implementation, create one upstream provider-specific fixture per provider per mode (non-streaming JSON and a raw streaming SSE transcript saved as `.txt`) from each provider's current official contract and write them to `packages/gateway/test/fixtures/`. Mark every fixture `live_capture_pending` regardless of local key availability: `ORCHESTRATOR.md` permits live calls only during the phase Verify window, so step 1 itself must remain offline. All adapter unit tests run against fixtures — no network in tests, ever (§11). During the final Phase 2 Verify window, replace the pending fixtures for configured providers with sanitized bounded live captures and clear only those providers' markers; unavailable providers retain their official-contract fixtures and explicit pending markers.
 
-2. **Anthropic non-streaming.** `src/providers/anthropic.ts` — request translation table (§3.2): extract/concat `system` messages → `system` param; `max_tokens ??= config.DEFAULT_MAX_TOKENS`; **`response_format` → Anthropic structured outputs via `output_config.format`** (confirm the current param name in Anthropic's structured-outputs docs); map response: `content[0].text` → message, `stop_reason` (`end_turn→stop`, `max_tokens→length`) → `finish_reason`, `usage.{input,output}_tokens` → `{prompt,completion}_tokens`. Reject `tools` with 400 (per §3.2) — and **resolve the `TODO(verify)` now**: grep web_builder_llm for `tools:`; if present, build tool translation in this phase.
+2. **Anthropic non-streaming.** `src/providers/anthropic.ts` — request translation table (§3.2): extract/concat `system` messages → `system` param; `max_tokens ??= config.DEFAULT_MAX_TOKENS`; **`response_format` → Anthropic structured outputs via `output_config.format`** (confirm the current param name in Anthropic's structured-outputs docs); map response: `content[0].text` → message, `stop_reason` (`end_turn→stop`, `max_tokens→length`) → `finish_reason`, `usage.{input,output}_tokens` → `{prompt,completion}_tokens`. The finished `web_builder_llm` source inspection found a native Anthropic tool call, so Phase 2 translates supported OpenAI function tools and `tool_choice` to Anthropic equivalents and rejects malformed or unsupported forms with a safe 400.
 
 3. **OpenAI-compatible streaming (OpenAI, Gemini, DeepSeek).** Forward with `stream: true` **and inject `stream_options: { include_usage: true }`**. Pipe SSE bytes to the client unbuffered; tee-parse each `data:` line just enough to (a) timestamp the first content delta → `first_token_ms`, and (b) capture usage from the terminal/final usage-bearing chunk. Preserve DeepSeek's cache-hit/cache-miss token fields. Validate every provider's transcript separately; compatibility is a tested contract, not an assumption.
 
@@ -402,10 +402,39 @@ Phase 7 step-4 Contract Amendment A (owner-approved 2026-07-30): widen the singl
 
 ### Phase 8 — Dogfood + writeup
 
+Phase 8 Truthfulness and Verify Amendment A (owner-approved 2026-07-31):
+the finished `web_builder_llm` integration remains buffered rather than gaining
+a new token-stream transport. Its normal-flow proof covers the existing
+buffered request/response and post-completion progress replay; live token-stream
+proof belongs to the nightly adapter contracts. The registry-backed call must
+be live before the observation window opens. The case study uses explicit
+cache-savings and matched direct-vs-proxied latency methods, and the phase ends
+against the literal Verify block below.
+
 1. Deploy compose on the host that runs web_builder_llm; create key `web_builder_llm`, budget $5.
 2. Resolve §9's `TODO(verify)`s: config surface (base URL / key / model name), `/v1/models` usage, `tools` usage (should already be settled since phase 2).
-3. Point web_builder_llm at PromptGate; run its normal flows; confirm streaming UX unchanged and rows accrue.
-4. Migrate one of its prompts into the registry, switch that call site to `pg_prompt` (satisfies §9's definition of proven).
-5. After a week: screenshot overview + drift; write the README case study — numbers to include: total spend, cache "$ saved", p95 latency added by the gateway (compare a direct-vs-proxied sample), one rollback story.
-6. **Add `contract-nightly.yml`** (deferred until now on purpose — §11): scheduled workflow, one minimal streaming + one non-streaming live request for each of OpenAI, Anthropic, Gemini, and DeepSeek, response shape asserted against the adapters' Zod schemas. Missing provider credentials are reported explicitly as deferred and never as live-green; decide the workflow's skip-vs-red policy when phase 8 creates it.
+3. Point web_builder_llm at PromptGate and run its normal generate/edit flows. The current `OPENAI_CHAT` path is buffered (`BodyHandlers.ofString()`, no `stream: true`), and its SSE endpoint replays progress only after synchronous completion. Confirm that buffered request/response and post-completion progress UX remain unchanged from the direct path, and that durable PromptGate request rows accrue. Do not claim provider-token streaming here or widen the external app's transport.
+4. Migrate one of its prompts into the registry, switch that call site to `pg_prompt`, and prove at least one live dogfood call records the resolved prompt/version. The seven-day observation window opens only after this registry-backed path is live.
+5. Observe at least seven consecutive calendar days with the registry-backed path live and at least one real dogfood request on five of those seven days. At the close of the window, screenshot Overview + Quality Drift and write the README case study. Include total spend; cache dollars saved as the sum of retained `cache_saved_micro_usd` over known cache-hit rows, reported with exact and estimated sums separate while the count of excluded unknown legacy hits is reported separately; and gateway p95 overhead as proxied p95 minus direct p95 from matched samples using the same model, prompt, sample size, and measurement window while excluding cache hits. Exercise a confirmed registry-label rollback and prove that the next dogfood call records and serves the rolled-back version.
+6. **Add `contract-nightly.yml`** (deferred until now on purpose — §11): scheduled workflow, one minimal streaming + one non-streaming live request for each of OpenAI, Anthropic, Gemini, and DeepSeek, response shape asserted against the adapters' Zod schemas. A missing provider credential is a named `SKIPPED` result, never live-green; a configured provider's contract failure makes the workflow red; and a run with zero configured providers is red. Retain at least one green schedule-triggered run for final Verify — a manual dispatch alone is insufficient.
 7. Close out in the **README**, not the idea file (the idea file stays untouched — ORCHESTRATOR.md rule): a "Deliverables" section mapping the idea file's five deliverables to evidence links (screenshot, workflow run, commit).
+
+**Verify phase 8:** the exact merged deployment is healthy and the dedicated
+`web_builder_llm` key retains its $5 monthly cap; all Phase 8
+`TODO(verify)` items are resolved; normal generate and edit flows succeed
+through PromptGate with the existing buffered completion and post-completion
+progress replay unchanged, and durable request rows identify the dogfood key;
+one migrated prompt is served live via `pg_prompt` before the observation
+window opens, and a confirmed registry-label rollback changes the next
+dogfood request to the rolled-back version; the retained evidence spans at
+least seven consecutive calendar days with at least one real dogfood request
+on five of those seven days; closing Overview and Quality Drift screenshots
+truthfully show the available live data (including an honestly empty drift
+state if no comparable eval drift occurred); the README reports spend,
+cache-savings provenance/formula, matched direct-vs-proxied p95 excluding cache
+hits, the buffered client limitation, and the rollback story; the scheduled
+contract workflow reports all four providers, exercises streaming and
+non-streaming paths for every configured provider under the approved
+`SKIPPED`/red/zero-provider policy, and retains at least one green
+schedule-triggered run; README deliverable links resolve; and the project owner
+gives final Phase 8 approval.
