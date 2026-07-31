@@ -394,6 +394,34 @@ h2 {
 .chart-frame--cost {
 	height: 22rem;
 }
+.chart-frame--quality {
+	height: 24rem;
+}
+.quality-disclosure {
+	color: #4b382b;
+	background: #fff6e6;
+	border-color: #efd39b;
+}
+.quality-status {
+	margin: 0 0 0.75rem;
+	color: #52616b;
+	font-size: 0.82rem;
+}
+.quality-empty {
+	min-height: 14rem;
+}
+.quality-annotations {
+	margin-top: 1rem;
+}
+.quality-annotations ul {
+	display: grid;
+	gap: 0.5rem;
+	padding-left: 1.2rem;
+	margin: 0.8rem 0 0;
+	color: #41515b;
+	font-size: 0.88rem;
+	line-height: 1.45;
+}
 .overview-grid {
 	display: grid;
 	grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -583,6 +611,9 @@ th {
 	}
 	.chart-frame--cost {
 		height: 18rem;
+	}
+	.chart-frame--quality {
+		height: 19rem;
 	}
 	.overview-grid {
 		grid-template-columns: 1fr;
