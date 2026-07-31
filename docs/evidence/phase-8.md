@@ -536,6 +536,16 @@ window on 2026-07-31. The inclusive target window is 2026-07-31 through
 four additional distinct calendar days in that window still need a real
 dogfood request.
 
+Active thread heartbeat `phase-8-dogfood-observation` checks once daily at
+09:00 local time through 2026-08-06. It first performs a read-only durable-row
+preflight and never sends duplicate traffic on a day that already qualifies.
+When a day has no qualifying row, it sends at most one date-unique, idempotent,
+text-only edit through the normal external app path; requires an `ok`,
+non-streaming prompt-ID-4/version-1 row; and records an independently audited
+green observation-day commit. It leaves `prod` at v1, preserves the $5/60-RPM
+key, never changes registry versions or the original finished repository, and
+notifies the owner only on a failed run/manual blocker.
+
 At opening, key 26 remains enabled with its exact 60 RPM and 5,000,000
 micro-USD monthly cap. It has five durable dogfood rows, retained spend 11,106
 micro-USD, exact cache savings 5,089 micro-USD, zero estimated cache savings,
