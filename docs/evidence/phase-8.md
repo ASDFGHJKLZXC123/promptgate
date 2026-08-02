@@ -3,7 +3,7 @@
 Date started: 2026-07-30
 
 Status: **in progress — step 4 complete; Truthfulness and Verify Amendment A
-owner-approved; observation day 2/7 complete with qualifying traffic on 2/5
+owner-approved; observation day 3/7 complete with qualifying traffic on 3/5
 required distinct days**.
 
 ## Step 1 — persistent deployment and dogfood key
@@ -648,3 +648,103 @@ evidence limit: caller-side HTTP start/end times and the app's pre-restart
 stopped state were transient operator observations rather than durable app
 artifacts; the durable event timestamps and resulting records corroborate the
 successful request.
+
+### Observation day 3 — 2026-08-02
+
+The first operation was the required in-container read-only database preflight
+over the exact local-day UTC interval, `2026-08-02 07:00:00` inclusive through
+`2026-08-03 07:00:00` exclusive. It found zero successful
+`web_builder_llm` rows attributed to prompt ID 4/version 1, so the
+duplicate-prevention gate allowed one request. The exact corrected PromptGate
+image was healthy with restart count zero; prompt ID 4 still had only immutable
+v1/v2, `web_builder_request@prod` resolved to v1, label history remained
+`null → 2` then `2 → 1`, and key 26 remained enabled at 60 RPM with its
+5,000,000-micro-USD cap.
+
+The ignored dogfood clone was not listening on loopback. Its first recovery
+launch omitted the existing persisted output-directory setting; a read-only
+project lookup exposed the empty store before any provider request, so that
+process was stopped and the clean external commit
+`ff47ea8fc8af17933b0ec5a2f0742c6f942324d3` was relaunched against the correct
+ignored output directory. Runtime keys stayed in owner-only ignored files and
+environment variables and were not printed.
+
+Exactly one normal edit request was then sent through the external app's
+`/api/projects/{projectId}/edit` path for Copper Spoke project
+`0036b6e2b6254e1795313ac555032eb0`, using expected active snapshot
+`eb1bf72cd15a47c39630a92c509e4d18`. Its date-unique idempotent text-only
+prompt was:
+
+```text
+Phase 8 observation day 3 2026-08-02: Confirm the existing page remains text-only and keep exactly one visible footer sentence reading 'Repairs made neighborly.', exactly one visible sentence reading 'Walk-ins welcome.', and exactly three FAQ questions. Preserve all other content and styling exactly; make no changes if these conditions already hold.
+```
+
+The synchronous request began at `2026-08-02T15:22:58.544Z`, returned HTTP
+200 at `2026-08-02T15:23:18.247Z`, and completed job
+`a44aa0cad2ee459abd5813978774505d`. A post-completion event read returned
+`START`, `STATUS`, `TOKEN_COUNT`, and `DONE` in order, with `START` at
+`2026-08-02T15:22:58.615272Z` and `DONE` at
+`2026-08-02T15:23:18.241182Z`. This is buffered completion with
+post-completion progress replay, not provider-token streaming. Exactly one new
+edit snapshot, `5d674218246c426d9d154ac9356ce571`, was created from parent
+`eb1bf72cd15a47c39630a92c509e4d18` with 3,179 input tokens, 3,374 output
+tokens, and 6,553 total tokens.
+
+Read-only in-container database verification found exactly one qualifying row
+for the day:
+
+```text
+id=431
+ts=2026-08-02 15:23:18 UTC
+request_id=3bc8bb07-4285-4774-a245-5ea5579ee2a3
+key=web_builder_llm
+provider=deepseek
+model=deepseek-v4-flash
+prompt_id=4
+prompt_version=1
+cache_hit=0
+streamed=0
+input_tokens=3179
+output_tokens=3374
+cost_microusd=1022
+cost_estimated=0
+cache_saved_microusd=0
+cache_saved_estimated=0
+status=ok
+error_code=null
+first_token_ms=null
+total_ms=19534
+```
+
+The resulting snapshot contains exactly one `Repairs made neighborly.`
+sentence, exactly one visible `Walk-ins welcome.` sentence, and exactly three
+FAQ `<details>` elements. Its `index.html` and `styles.css` are byte-identical
+to the parent snapshot and retain the expected hashes:
+
+```text
+index.html sha256=82eaf1ab4c8684ec1ccc3aa19b99a295d59e4f0fa073b6c8587413b66dda973d
+styles.css sha256=df66c49008b5e3685654d6fd6af9476e0f6cf62295979973e7b750e3d8f352dd
+```
+
+Across seven retained dogfood rows, retained spend is now 13,286 micro-USD.
+Exact cache savings remain 5,089 micro-USD, estimated cache savings remain
+zero, and unknown legacy cache-hit rows remain zero. Adding only the separately
+disclosed exact 5,089-micro-USD pre-fix orphan yields 18,375 micro-USD of known
+provider-priced completions; it is not represented as retained spend.
+
+The window now proves exactly one qualifying row on each of 2026-07-31,
+2026-08-01, and 2026-08-02: day 3/7 of the exact span and 3/5 required distinct
+traffic days are complete. At least two more distinct days still need a
+qualifying request, and the window must remain open through 2026-08-06 before
+closing analysis.
+
+A fresh independent read-only observation-day audit returned `APPROVE`. It
+reconciled row 431 and its uniqueness, all three qualifying dates, registry and
+label state, key limits, exact gateway image health, retained and
+orphan-inclusive accounting, both repository states, job events, snapshot
+parentage and token usage, content counts, hashes, and byte identity. It found
+no exposed credential value or material overclaim. The reviewer identified the
+initial stopped state, omitted-output recovery launch, preflight ordering,
+caller-side timing, and the fact that recovery preceded provider traffic as
+transient operator observations rather than durable artifacts; the durable
+records independently corroborate the successful recovered request.
