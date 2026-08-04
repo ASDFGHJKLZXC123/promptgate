@@ -3,8 +3,8 @@
 Date started: 2026-07-30
 
 Status: **in progress — step 4 complete; Truthfulness and Verify Amendment A
-owner-approved; observation day 4/7 complete with qualifying traffic on 4/5
-required distinct days**.
+owner-approved; observation day 5/7 complete and the 5/5 distinct-traffic-day
+floor is satisfied**.
 
 ## Step 1 — persistent deployment and dogfood key
 
@@ -885,3 +885,139 @@ excluded from latency analysis. It found no exposed credential value, required
 correction, or material overclaim. The one-app-call/no-caller-retry and preflight
 ordering remain disclosed transient operator observations rather than durable
 artifacts.
+
+### Observation day 5 — 2026-08-04
+
+The first operation was the required in-container read-only database preflight
+over local day 2026-08-04, represented by the UTC interval
+`2026-08-04 07:00:00` inclusive through `2026-08-05 07:00:00` exclusive. It
+found zero successful `web_builder_llm` rows attributed to prompt ID 4/version
+1, so the duplicate-prevention gate allowed one logical app edit. The exact
+corrected PromptGate image was healthy with restart count zero; prompt ID 4
+still had only immutable v1/v2, `web_builder_request@prod` resolved to v1,
+label history remained `null → 2` then `2 → 1`, and key 26 remained enabled
+at 60 RPM with its 5,000,000-micro-USD cap.
+
+The ignored dogfood clone was not listening on loopback and was safely
+restarted from clean external commit
+`ff47ea8fc8af17933b0ec5a2f0742c6f942324d3` against the existing ignored
+output directory. Runtime keys remained in owner-only ignored files and
+environment variables and were not printed. A read-only project lookup
+confirmed active snapshot `ac5e5e21dec54ac28474020c5660b840` before any
+provider request.
+
+Exactly one normal POST was sent through the external app's
+`/api/projects/{projectId}/edit` path for Copper Spoke project
+`0036b6e2b6254e1795313ac555032eb0`, with no caller retry. Its date-unique
+idempotent text-only prompt was:
+
+```text
+Phase 8 observation day 5 2026-08-04: Leave the text-only Copper Spoke page unchanged. Confirm that it has exactly three FAQ questions, one visible 'Walk-ins welcome.' sentence, and one footer sentence reading 'Repairs made neighborly.' Return the current HTML and CSS unchanged when those conditions are satisfied; add no assets or images.
+```
+
+As on day 4, the app's normal bounded transient-retry policy used two
+PromptGate attempts inside that one logical edit. The first became durable row
+434 after the app-side connection closed; PromptGate classified it
+`client_aborted`, aborted upstream, and retained conservative input-only
+metering. The second attempt succeeded as row 435. The day therefore contains
+one app edit, one successful qualifying row, and one separately visible failed
+attempt rather than duplicate successful traffic.
+
+```text
+id=434
+ts=2026-08-04 09:33:32 UTC
+request_id=23487e69-1e63-4a24-8247-a736c0d9b942
+key=web_builder_llm
+provider=deepseek
+model=deepseek-v4-flash
+prompt_id=4
+prompt_version=1
+cache_hit=0
+streamed=0
+input_tokens=2647
+output_tokens=0
+cost_microusd=371
+cost_estimated=1
+cache_saved_microusd=0
+cache_saved_estimated=0
+status=client_aborted
+error_code=null
+first_token_ms=null
+total_ms=5992
+```
+
+The single app call returned HTTP 200 with job
+`38b4f58ab1c843bf86d0ff180de0e3e7`. A post-completion event read returned
+`START`, `STATUS`, `TOKEN_COUNT`, and `DONE` in order and named snapshot
+`22d1bb892aef4084a17fb9e8b36ac82a`. The caller and event wall-clock fields
+span `2026-08-04T09:33:26Z` through `2026-08-04T09:39:44Z`, while the retained
+attempts completed at `09:33:32Z` and `09:33:49Z` with monotonic durations of
+5,992 and 16,567 ms. The inconsistent wall-clock span is excluded from latency
+evidence; PromptGate's per-attempt `total_ms` values are the retained measure.
+The completed job remains buffered completion with post-completion progress
+replay, not provider-token streaming.
+
+Read-only in-container verification found exactly one successful qualifying
+row for the local day:
+
+```text
+id=435
+ts=2026-08-04 09:33:49 UTC
+request_id=6b3ccf12-2e27-4e6b-a42d-4d32fe4e3534
+key=web_builder_llm
+provider=deepseek
+model=deepseek-v4-flash
+prompt_id=4
+prompt_version=1
+cache_hit=0
+streamed=0
+input_tokens=3182
+output_tokens=3339
+cost_microusd=959
+cost_estimated=0
+cache_saved_microusd=0
+cache_saved_estimated=0
+status=ok
+error_code=null
+first_token_ms=null
+total_ms=16567
+```
+
+Exactly one new edit snapshot, `22d1bb892aef4084a17fb9e8b36ac82a`, was
+created from parent `ac5e5e21dec54ac28474020c5660b840` with 3,182 input
+tokens, 3,339 output tokens, and 6,521 total tokens. It contains exactly one
+`Repairs made neighborly.` sentence, exactly one visible `Walk-ins welcome.`
+sentence, and exactly three FAQ `<details>` elements. Its `index.html` and
+`styles.css` are byte-identical to the parent snapshot and retain the expected
+hashes:
+
+```text
+index.html sha256=82eaf1ab4c8684ec1ccc3aa19b99a295d59e4f0fa073b6c8587413b66dda973d
+styles.css sha256=df66c49008b5e3685654d6fd6af9476e0f6cf62295979973e7b750e3d8f352dd
+```
+
+Across eleven retained dogfood rows, ledger spend is now 15,965 micro-USD:
+15,223 exact and 742 conservative estimated micro-USD. Exact cache savings
+remain 5,089 micro-USD, estimated cache savings remain zero, and unknown legacy
+cache-hit rows remain zero. Adding the separately disclosed exact
+5,089-micro-USD pre-fix orphan yields 21,054 micro-USD of orphan-inclusive
+accounting, comprising 20,312 micro-USD of known exact provider-priced
+completions plus the retained 742-micro-USD conservative abort estimates. The
+estimates are not represented as exact provider completion prices.
+
+The window now proves exactly one successful qualifying row on each of
+2026-07-31 through 2026-08-04: day 5/7 of the exact span and all 5/5 required
+distinct traffic days are complete. The traffic floor is satisfied, but the
+seven-day observation cannot close before 2026-08-06. Daily duplicate-safe
+checks continue under the approved heartbeat until the full span is proven.
+
+A fresh independent read-only observation-day audit returned `APPROVE`. It
+reconciled rows 434/435, the sole successful local-day qualifier, all five
+qualifying dates, exact/estimated retained accounting, the separate orphan,
+registry and key state, exact gateway image health, both repository states,
+bounded retry behavior, job replay, token usage, and the wall-clock/monotonic
+timing treatment. It found no exposed credential value, arithmetic error, or
+material overclaim. Because the audit was timeboxed, its reviewer did not
+freshly repeat the final snapshot file hash/count/byte-comparison commands and
+explicitly relied on the orchestrator's completed read-only output verification
+for those narrow claims; no contrary evidence was found.
