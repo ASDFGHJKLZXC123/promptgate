@@ -1,0 +1,136 @@
+{
+	"method": {
+		"model": "deepseek-v4-flash",
+		"prompt": "Reply with exactly OK.",
+		"sample_count_per_arm": 20,
+		"excluded_warmups_per_arm": 1,
+		"interleaving": "10 direct-proxied blocks and 10 proxied-direct blocks",
+		"measurement": "client elapsed through complete buffered JSON body",
+		"p95": "nearest rank ceil(0.95 * N), rank 19 of 20",
+		"cache_rule": "PromptGate miss and zero provider-cache tokens for every call; invalidate rather than filter",
+		"canonical_body_sha256": "bd06bc7971cca94c8b29a80c1791ca5e53d726b0054378e4b62bd8b026eaa4bb",
+		"canonical_body": {
+			"model": "deepseek-v4-flash",
+			"messages": [{ "role": "user", "content": "Reply with exactly OK." }],
+			"temperature": 0,
+			"max_tokens": 8,
+			"stream": false,
+			"thinking": { "type": "disabled" },
+			"user_id": "phase8_latency_20260806"
+		},
+		"started_at": "2026-08-06T15:17:07.255Z",
+		"ended_at": "2026-08-06T15:17:44.356Z"
+	},
+	"disposable_key": {
+		"id": 27,
+		"name": "phase8-latency-20260806",
+		"budget_micro_usd_month": 10000,
+		"rate_limit_rpm": 60,
+		"disabled_after": true,
+		"plaintext_handoff_removed_after": true
+	},
+	"warmups": {
+		"direct_ms": 1310.137,
+		"proxied_ms": 1109.887,
+		"proxied_request_id": "e93c0477-edeb-414f-959c-fa93b8971767"
+	},
+	"order": [
+		"direct-proxied",
+		"proxied-direct",
+		"direct-proxied",
+		"proxied-direct",
+		"direct-proxied",
+		"proxied-direct",
+		"direct-proxied",
+		"proxied-direct",
+		"direct-proxied",
+		"proxied-direct",
+		"direct-proxied",
+		"proxied-direct",
+		"direct-proxied",
+		"proxied-direct",
+		"direct-proxied",
+		"proxied-direct",
+		"direct-proxied",
+		"proxied-direct",
+		"direct-proxied",
+		"proxied-direct"
+	],
+	"direct_ms": [
+		710.455, 710.428, 1042.557, 742.367, 872.865, 894.911, 966.664, 919.765,
+		717.022, 788.95, 806.215, 1073.328, 917.485, 1001.74, 818.812, 776.447,
+		966.295, 913.008, 699.89, 738.782
+	],
+	"proxied_ms": [
+		1028.321, 920.338, 799.428, 976.302, 759.655, 974.17, 880.231, 816.46,
+		766.091, 919.875, 822.238, 760.584, 1134.724, 833.761, 827.527, 897.545,
+		1041.012, 952.35, 837.736, 632.748
+	],
+	"proxied_request_ids": [
+		"b22ee5c7-60c5-4e23-8f13-1e5eb63fcb51",
+		"7766fc1f-aad7-469f-b951-d0bdb3cb4b26",
+		"538cc456-ae0e-48c9-b6bb-8a081a7e6b07",
+		"b8704e7f-e734-4631-b18d-1354de1bdb1d",
+		"1162e220-340c-40f7-9259-1e8fc1d2138f",
+		"dcc0231a-c4dd-48b6-ab8d-975837438795",
+		"1e91b076-b2df-44ab-bb19-38e291825566",
+		"bcafcf38-22c5-4341-b1e0-34473f4e3bd7",
+		"5c1f2d5f-bce2-4527-ae48-c6dd66f9aff5",
+		"294444d2-4d5b-40b0-ac24-b62f4137a78c",
+		"9a966575-3d55-4b96-b227-c976aa94c3b2",
+		"8bd6720d-553d-4697-a512-bd2a900deb38",
+		"1c633069-3f85-4c14-a4de-52382b08629c",
+		"8491db5a-bcdf-4faf-adf5-106d66f48e6d",
+		"997d4ef2-1841-4a30-81e0-a6e89a67c380",
+		"89b0ddd0-824c-451e-83a1-3eec02cd1fe0",
+		"622650ec-f940-4f7b-b09b-e2ac571ebff7",
+		"6ea1a893-9736-4e1d-af84-e6b61932450a",
+		"93e71f68-8c33-4c67-b5db-cfaa4c475a2d",
+		"9a63771e-33c7-49b6-adae-a19115a42f84"
+	],
+	"usage_per_measured_call": {
+		"prompt_tokens": 9,
+		"completion_tokens": 2,
+		"total_tokens": 11,
+		"provider_cache_hit_tokens": 0,
+		"provider_cache_miss_tokens": 9
+	},
+	"usage_totals_per_measured_arm": {
+		"prompt_tokens": 180,
+		"completion_tokens": 40,
+		"total_tokens": 220,
+		"provider_cache_hit_tokens": 0,
+		"provider_cache_miss_tokens": 180
+	},
+	"result": {
+		"direct_p95_ms": 1042.557,
+		"proxied_p95_ms": 1041.012,
+		"gateway_p95_delta_ms": -1.545
+	},
+	"durable_proxy_verification": {
+		"measured_rows": 20,
+		"warmup_rows": 1,
+		"all_status_ok": true,
+		"all_cache_hit_zero": true,
+		"all_streamed_zero": true,
+		"all_prompt_attribution_null": true,
+		"all_cost_exact": true,
+		"measured_spend_micro_usd": 40,
+		"warmup_spend_micro_usd": 2,
+		"input_tokens_per_row": 9,
+		"output_tokens_per_row": 2,
+		"measured_total_ms_range": [629, 1130]
+	},
+	"separate_direct_rate_derived_cost": {
+		"measured_micro_usd": 36.4,
+		"warmup_micro_usd": 1.82,
+		"total_micro_usd": 38.22,
+		"included_in_promptgate_ledger": false
+	},
+	"dogfood_key_after": {
+		"retained_rows": 15,
+		"ledger_spend_micro_usd": 18977,
+		"successful_prompt_4_version_1_rows": 6,
+		"unchanged": true
+	}
+}

@@ -1272,3 +1272,98 @@ service health/no recovery, local `TimeoutError`, Opus advice, and attribution
 of both rows to one outer POST as transient operator facts that durable state
 cannot uniquely reconstruct; the rows and retry source corroborate the
 resulting state without proving those actions independently.
+
+## Step 5 closing analysis — dashboard evidence and matched latency
+
+The closing dashboard data and browser DOM were loaded after the observation
+window and before the dedicated latency sample, and the browser's original
+screenshot capture used that unrefreshed view. After the benchmark, those
+browser-produced JPEG bytes were re-encoded as correctly typed PNG files
+without reloading the dashboard. The current PNG creation times therefore
+postdate the benchmark, while their visible 439-request content remains the
+pre-benchmark view; benchmark rows 440–460 do not appear in either image.
+Authentication passed through an ephemeral loopback-only proxy; its credential
+stayed in process memory, was not placed in a URL or screenshot, and the proxy
+was stopped after capture.
+
+### Closing screenshots
+
+![PromptGate closing Overview dashboard](./phase-8/overview.png)
+
+The Overview screenshot is a truthful global view of the retained database at
+capture time. It shows 439 requests, a `$0.12` known spend subtotal, the live
+p50/p95 series, cache-rate and known-savings panels, and the dedicated
+`web_builder_llm` key at `$0.01 of $5.00`. Its global caveats remain visible:
+36 requests have unknown pricing and total cache savings are unknown for seven
+requests. Those database-wide unknowns are distinct from the dogfood-only
+accounting above, where the fifteen retained key-26 rows have no unknown legacy
+cache hits. The PNG is 1280×2400 with SHA-256
+`1bd7546d01103e29974a959c835d3ec3aee70698f2e20ce2eac1f8a648959da8`.
+
+![PromptGate closing Quality Drift dashboard](./phase-8/quality-drift.png)
+
+The Quality Drift screenshot shows all five retained eval runs in one immutable
+dataset-hash series and the comparable v1→v2 prompt-version marker. It also
+keeps the required historical-judge limitation visible: judge identity was not
+persisted, so the chart supplies change context without asserting that the
+prompt or model caused a score movement. The PNG is 1280×988 with SHA-256
+`35e8ce74f1cb7fe4926af411b8bb9a7513ceb10462e821de3062a9dee52bf5a2`.
+
+### Matched uncached p95 sample
+
+The method was predeclared in commit `a7aabe9` before benchmark traffic. It
+used one byte-identical canonical non-streaming body and the same
+`deepseek-v4-flash` provider model for both arms. Twenty measured calls per arm
+plus one excluded warm-up per arm ran in one balanced interleaved window from
+`2026-08-06T15:17:07.255Z` through `2026-08-06T15:17:44.356Z`. Client elapsed
+time covered the complete buffered JSON response. Nearest-rank p95 selected
+rank `ceil(0.95 × 20) = 19`, and the signed gateway result is proxied p95 minus
+direct p95.
+
+The proxy arm used a separate disposable key capped at $0.01 and 60 RPM,
+`x-pg-no-cache: true`, feature `phase8_latency`, and no registry prompt. The
+direct arm called the same provider with the same serialized body. Every
+measured response in both arms reported 9 prompt, 2 completion, and 11 total
+tokens, with zero provider-cache-hit tokens; all proxy responses were
+PromptGate cache misses. No call failed, so the fixed sample required no
+filtering, replacement, retry, or extension.
+
+```text
+direct p95       = 1042.557 ms
+proxied p95      = 1041.012 ms
+signed delta     =   -1.545 ms
+```
+
+The negative signed delta does not mean the gateway accelerates the provider.
+It means this small matched window found no measurable positive gateway p95
+overhead: upstream/network variation is larger than the 1.545 ms ordering
+difference. The raw sample and exact method are retained in
+[`phase-8/latency-sample.json`](./phase-8/latency-sample.json), whose SHA-256 is
+`a94386b1a0ba8b454a13c1ce405b03ba2dbfccb9e24fab02d9e8cd48c6590998`.
+
+Durable verification found exactly twenty measured `phase8_latency` rows plus
+one excluded warm-up row under key 27. All are `ok`, uncached, non-streaming,
+exactly metered, and have null prompt attribution; the measured proxy arm cost
+40 micro-USD and its warm-up cost 2 micro-USD. The direct measured arm bypassed
+PromptGate and cost a separately rate-derived 36.4 micro-USD, plus 1.82
+micro-USD for its warm-up. Key 27 was disabled and its owner-only plaintext
+handoff removed. The dogfood key remained unchanged at fifteen rows, 18,977
+micro-USD ledger spend, and six successful prompt-ID-4/version-1 rows; the
+registry and `prod = v1` label were untouched.
+
+The screenshots and latency sample complete the measurement portion of step 5.
+The README case-study rendering, nightly contract evidence, exact merged
+deployment, and literal final Verify still remain.
+
+A fresh independent read-only closing-analysis audit returned `APPROVE`. It
+recomputed both rank-19 p95s and the signed delta, verified the canonical body
+hash, fixed balanced ordering and time window, reconciled all key-27 rows and
+costs, and confirmed key 27 is disabled with no plaintext handoff. It also
+reconciled key 26, prompt versions/history and `prod = v1`, both image hashes
+and dimensions, the 439-row pre-benchmark view versus current rows 440–460,
+the global-versus-dogfood unknown-accounting boundary, and the five-run drift
+view. It found no credential literal in the artifacts, no listener on the
+ephemeral proxy port, and no remaining correctness or evidence-integrity
+blocker. The original JPEG capture/re-encode chronology is a contemporaneous
+operator fact; the material 439-row pre-benchmark data boundary is independently
+durable and visible.
