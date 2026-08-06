@@ -3,8 +3,9 @@
 Date started: 2026-07-30
 
 Status: **in progress — step 4 complete; Truthfulness and Verify Amendment A
-owner-approved; observation day 6/7 complete with six qualifying traffic days;
-the 5/5 floor is satisfied**.
+owner-approved; the exact seven-day observation window is complete with real
+registry-backed traffic on all seven days and successful qualifying traffic on
+six; the 5/5 floor is exceeded**.
 
 ## Step 1 — persistent deployment and dogfood key
 
@@ -1153,3 +1154,121 @@ POST/no-caller-retry assertion, contemporaneous app health, and caller HTTP
 status as transient operator observations; durable rows, process uptime, event
 replay, and snapshot artifacts corroborate the resulting state without
 independently reconstructing those actions.
+
+### Observation day 7 — 2026-08-06
+
+The first operation was the required in-container read-only database preflight
+over local day 2026-08-06, represented by the UTC interval
+`2026-08-06 07:00:00` inclusive through `2026-08-07 07:00:00` exclusive. It
+found zero successful `web_builder_llm` rows attributed to prompt ID 4/version
+1, so the duplicate-prevention gate allowed one logical app edit. The exact
+corrected PromptGate image remained healthy with restart count zero, and the
+dogfood app was already healthy on loopback against its persisted output. No
+service recovery was required. Prompt ID 4 still had only immutable v1/v2,
+`web_builder_request@prod` resolved to v1, label history remained `null → 2`
+then `2 → 1`, and key 26 remained enabled at 60 RPM with its
+5,000,000-micro-USD cap. Runtime keys were not emitted.
+
+A read-only project lookup confirmed active snapshot
+`124074ce895d4634b55c77350fa6e390`. Exactly one normal POST was then sent
+through the external app's `/api/projects/{projectId}/edit` path for Copper
+Spoke project `0036b6e2b6254e1795313ac555032eb0`, with no caller retry. Its
+date-unique idempotent text-only prompt was:
+
+```text
+Phase 8 observation day 7 2026-08-06: Keep the current text-only Copper Spoke site exactly unchanged. Confirm it still contains exactly three FAQ questions, exactly one visible "Walk-ins welcome." sentence, and exactly one footer sentence reading "Repairs made neighborly." Return the existing HTML and CSS unchanged; add no images, scripts, sections, or copy.
+```
+
+The caller surfaced a local `TimeoutError` before receiving an application
+response. The durable state does not identify the outer caller/session cause,
+so no root cause is asserted. The app's normal one-retry transient policy made
+two PromptGate attempts inside that single logical edit. Both app-side
+connections closed before a completion was delivered; PromptGate aborted each
+upstream operation and retained conservative input-only metering:
+
+```text
+id=438
+ts=2026-08-06 09:08:25 UTC
+request_id=aeb1c5ba-1095-46cf-8811-bd5bb72ff29b
+key=web_builder_llm
+provider=deepseek
+model=deepseek-v4-flash
+prompt_id=4
+prompt_version=1
+cache_hit=0
+streamed=0
+input_tokens=2652
+output_tokens=0
+cost_microusd=371
+cost_estimated=1
+cache_saved_microusd=0
+cache_saved_estimated=0
+status=client_aborted
+error_code=null
+first_token_ms=null
+total_ms=39177
+
+id=439
+ts=2026-08-06 09:24:54 UTC
+request_id=3c11cd3d-9709-4a2f-9a74-b09bc7ca2e56
+key=web_builder_llm
+provider=deepseek
+model=deepseek-v4-flash
+prompt_id=4
+prompt_version=1
+cache_hit=0
+streamed=0
+input_tokens=2652
+output_tokens=0
+cost_microusd=371
+cost_estimated=1
+cache_saved_microusd=0
+cache_saved_estimated=0
+status=client_aborted
+error_code=null
+first_token_ms=null
+total_ms=48055
+```
+
+A post-attempt project read showed no new snapshot: active snapshot
+`124074ce895d4634b55c77350fa6e390` and its
+`2026-08-05T11:14:22.510380Z` update time were unchanged. There was no
+buffered completion or event replay to claim for this failed edit, and rows
+438/439 are excluded from successful latency samples. A second logical POST
+was not sent: the daily rail permits at most one, a successful Aug-6 row was
+not needed to satisfy the owner-approved five-of-seven acceptance floor, and
+extra traffic after an ambiguous caller failure would have added cost without
+improving the required evidence.
+
+Across fifteen retained dogfood rows, ledger spend is now 18,977 micro-USD:
+17,122 exact and 1,855 conservative estimated micro-USD. Exact cache savings
+remain 5,089 micro-USD, estimated cache savings remain zero, and unknown legacy
+cache-hit rows remain zero. Adding the separately disclosed exact
+5,089-micro-USD pre-fix orphan yields 24,066 micro-USD of orphan-inclusive
+accounting, comprising 22,211 micro-USD of known exact provider-priced
+completions plus the retained 1,855-micro-USD conservative abort estimates.
+The estimates are not represented as exact provider completion prices.
+
+The inclusive 2026-07-31 through 2026-08-06 window is now complete. Every
+local day contains real registry-backed `web_builder_llm` traffic attributed
+to prompt ID 4/version 1. Exactly one successful qualifier exists on each of
+2026-07-31 through 2026-08-05, for six distinct successful traffic days
+against the required five; 2026-08-06 contains only the two disclosed failed
+attempt rows from its one logical edit. The seven-day observation therefore
+passes the approved 5/7 acceptance contract without mislabeling the final
+day's failed edit as a success. Closing screenshots, matched uncached latency
+analysis, the scheduled contract workflow, the README case study, and the
+literal Phase 8 Verify remain.
+
+A fresh independent read-only final-day/window audit returned `APPROVE`. It
+reconciled rows 438/439, the zero Aug-6 success count, all seven local-day
+traffic counts, six distinct successful days, exact/estimated retained
+accounting, the separate orphan arithmetic, prompt/label/key state, exact image
+health, unchanged active snapshot, both repository states, and the bounded
+retry/abort source behavior. It found no credential disclosure, arithmetic
+error, required correction, or material overclaim. The reviewer recorded the
+first-operation ordering, one outer POST/no caller retry, contemporaneous
+service health/no recovery, local `TimeoutError`, Opus advice, and attribution
+of both rows to one outer POST as transient operator facts that durable state
+cannot uniquely reconstruct; the rows and retry source corroborate the
+resulting state without proving those actions independently.
