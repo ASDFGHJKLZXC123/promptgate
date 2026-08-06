@@ -2,10 +2,11 @@
 
 Date started: 2026-07-30
 
-Status: **in progress — step 4 complete; Truthfulness and Verify Amendment A
-owner-approved; the exact seven-day observation window is complete with real
-registry-backed traffic on all seven days and successful qualifying traffic on
-six; the 5/5 floor is exceeded**.
+Status: **in progress — steps 1–5 are complete; step 6 implementation is
+offline-green and independently approved, with the required first green
+schedule-triggered run still pending publication to the default branch; the
+seven-day window passed with registry-backed traffic on all seven days and
+successful qualifying traffic on six**.
 
 ## Step 1 — persistent deployment and dogfood key
 
@@ -1367,3 +1368,63 @@ ephemeral proxy port, and no remaining correctness or evidence-integrity
 blocker. The original JPEG capture/re-encode chronology is a contemporaneous
 operator fact; the material 439-row pre-benchmark data boundary is independently
 durable and visible.
+
+## Step 6 — nightly live provider contracts
+
+`.github/workflows/contract-nightly.yml` now provides a daily `09:17 UTC`
+schedule plus manual dispatch. It installs from the frozen lockfile, builds the
+repository, and runs the compiled gateway contract runner with read-only
+repository permission. Checkout, Node setup, and pnpm setup use full commit-SHA
+action pins, and checkout credential persistence is disabled. The four
+provider credentials are referenced only in the final live runner step.
+
+The runner always reports the complete approved provider matrix:
+
+| Provider | Pinned model |
+|---|---|
+| OpenAI | `gpt-5.6-luna` |
+| Anthropic | `claude-sonnet-5` |
+| Gemini | `gemini-2.5-flash` |
+| DeepSeek | `deepseek-v4-flash` |
+
+Each configured provider receives exactly one logical non-streaming adapter
+invocation and one logical streaming adapter invocation with the minimal
+`Reply with exactly OK.` prompt and a 64-token ceiling. Existing bounded
+transport retries remain part of the real adapter behavior. Non-streaming
+responses are revalidated with `ChatResponseSchema` and must contain visible
+text. Every streaming data frame is revalidated with
+`ChatCompletionChunkSchema`; the run requires visible text, exactly one
+terminal usage-bearing chunk, no later data, one `[DONE]`, and no frame after
+`[DONE]`.
+
+A missing credential produces a named `SKIPPED` row for that provider. Every
+configured provider still attempts both modes even if its first mode fails;
+either mode failing makes the provider and workflow red. Zero configured
+providers is explicitly red. Error summaries replace every configured secret
+value with `[REDACTED]` before console or job-summary output and cap retained
+detail length. The job summary always names all four providers and both modes.
+
+Offline verification passed:
+
+```text
+focused nightly tests: 15 passed
+full repository tests: 69 files, 874 passed
+lint: 185 files checked
+gateway build: passed
+workflow YAML parse: passed
+diff check: clean
+zero-credential compiled probe: four named SKIPPED rows, exit 1
+```
+
+The final code audit first found that a usage-bearing streaming chunk was
+counted but not independently proven terminal. The runner now rejects any
+later data frame, and a `usage → later content → [DONE]` regression stays red.
+A fresh independent read-only re-audit then returned `APPROVE` across call
+counts, schemas/content/terminal rules, model pins, skip/failure policies,
+secret handling, action pins, permissions, workflow shape, build, and tests.
+No live provider request ran during implementation or audit.
+
+Implementation alone does not satisfy final Verify. The workflow must first be
+merged to the default branch and retain an actually green `schedule` event;
+manual dispatch cannot substitute for that evidence. The README contains a
+clearly marked pending run link until that event exists.
