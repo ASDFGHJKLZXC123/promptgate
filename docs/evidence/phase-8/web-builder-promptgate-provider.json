@@ -1,0 +1,17 @@
+{
+	"providers": [
+		{
+			"providerId": "promptgate",
+			"apiFamily": "OPENAI_CHAT",
+			"authScheme": "BEARER",
+			"baseUrl": "http://127.0.0.1:8787/v1",
+			"defaultEnvKey": "PROMPTGATE_API_KEY",
+			"jsonStrategy": "NATIVE_JSON_OBJECT",
+			"defaultModels": ["deepseek-v4-flash"],
+			"supportsStreaming": true,
+			"supportsVisionInput": false,
+			"supportsImageGeneration": false,
+			"supportsImageEdit": false
+		}
+	]
+}
