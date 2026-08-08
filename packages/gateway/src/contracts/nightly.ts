@@ -9,6 +9,7 @@ import { createAnthropicAdapter } from "../providers/anthropic.js";
 import { createDeepSeekAdapter } from "../providers/deepseek.js";
 import { createGeminiAdapter } from "../providers/gemini.js";
 import { createOpenAiAdapter } from "../providers/openai.js";
+import { ProviderError } from "../providers/provider-error.js";
 import type { ProviderAdapter, ProviderName } from "../providers/types.js";
 
 const CONTRACT_MAX_TOKENS = 64;
@@ -103,21 +104,170 @@ function buildRequest(model: string): ChatRequest {
 	});
 }
 
-function redact(value: string, secrets: readonly string[]): string {
-	let result = value;
+interface Span {
+	start: number;
+	end: number;
+}
+
+// Every occurrence of every nonempty configured secret is located against the
+// original, untouched string first. Sequential replace-in-definition-order
+// would let a shorter secret's replacement destroy a longer overlapping
+// secret's match (or vice versa), leaking a credential fragment.
+function findSecretSpans(value: string, secrets: readonly string[]): Span[] {
+	const spans: Span[] = [];
 	for (const secret of secrets) {
-		if (secret.length > 0) {
-			result = result.replaceAll(secret, "[REDACTED]");
+		if (secret.length === 0) continue;
+		let fromIndex = 0;
+		for (;;) {
+			const index = value.indexOf(secret, fromIndex);
+			if (index === -1) break;
+			spans.push({ start: index, end: index + secret.length });
+			fromIndex = index + 1;
 		}
+	}
+	return spans;
+}
+
+function mergeSpans(spans: Span[]): Span[] {
+	const sorted = [...spans].sort((a, b) => a.start - b.start || a.end - b.end);
+	const merged: Span[] = [];
+	for (const span of sorted) {
+		const last = merged[merged.length - 1];
+		if (last !== undefined && span.start <= last.end) {
+			last.end = Math.max(last.end, span.end);
+		} else {
+			merged.push({ ...span });
+		}
+	}
+	return merged;
+}
+
+function redact(value: string, secrets: readonly string[]): string {
+	const spans = mergeSpans(findSecretSpans(value, secrets));
+	if (spans.length === 0) return value;
+	let result = "";
+	let cursor = 0;
+	for (const span of spans) {
+		result += `${value.slice(cursor, span.start)}[REDACTED]`;
+		cursor = span.end;
+	}
+	result += value.slice(cursor);
+	return result;
+}
+
+// Every provider's error body nests its diagnostic fields under `error`
+// (OpenAI/Gemini) or duplicates a generic top-level discriminator alongside a
+// specific nested one (Anthropic's top-level `type: "error"`), so the nested
+// object always wins when both are present.
+const DIAGNOSTIC_FIELDS = [
+	"type",
+	"code",
+	"param",
+	"status",
+	"message",
+] as const;
+const DIAGNOSTIC_FIELD_MAX_LENGTH = 200;
+const MAX_CONTROL_CHAR_CODE = 31;
+const DELETE_CHAR_CODE = 127;
+const C1_CONTROL_MIN_CODE = 128;
+const C1_CONTROL_MAX_CODE = 159;
+
+function isControlChar(code: number): boolean {
+	return (
+		code <= MAX_CONTROL_CHAR_CODE ||
+		code === DELETE_CHAR_CODE ||
+		(code >= C1_CONTROL_MIN_CODE && code <= C1_CONTROL_MAX_CODE)
+	);
+}
+
+function stripControlChars(value: string): string {
+	let result = "";
+	for (const char of value) {
+		const code = char.codePointAt(0) ?? 0;
+		result += isControlChar(code) ? " " : char;
 	}
 	return result;
 }
 
+function normalizeControlChars(value: string): string {
+	return stripControlChars(value)
+		.split(/\s+/)
+		.filter((part) => part.length > 0)
+		.join(" ");
+}
+
+function toScalarString(value: unknown): string | undefined {
+	if (typeof value === "string") return value;
+	if (typeof value === "number" && Number.isFinite(value)) return String(value);
+	if (typeof value === "boolean") return String(value);
+	return undefined;
+}
+
+function readScalarField(source: unknown, field: string): string | undefined {
+	if (typeof source !== "object" || source === null) return undefined;
+	return toScalarString((source as Record<string, unknown>)[field]);
+}
+
+function extractDiagnosticFields(
+	body: unknown,
+): Partial<Record<(typeof DIAGNOSTIC_FIELDS)[number], string>> {
+	const fields: Partial<Record<(typeof DIAGNOSTIC_FIELDS)[number], string>> =
+		{};
+	const nested =
+		typeof body === "object" && body !== null
+			? (body as Record<string, unknown>).error
+			: undefined;
+	for (const field of DIAGNOSTIC_FIELDS) {
+		const value =
+			readScalarField(nested, field) ?? readScalarField(body, field);
+		if (value !== undefined) {
+			fields[field] = value;
+		}
+	}
+	return fields;
+}
+
+/**
+ * Formats only a fixed allowlist of scalar upstream fields (never arbitrary
+ * body/details) for a ProviderError, so a nightly diagnostic can name the
+ * exact upstream cause without ever echoing an unbounded or unknown payload.
+ */
+function formatProviderErrorDiagnostics(
+	error: ProviderError,
+	secrets: readonly string[],
+): string {
+	const base = `${error.name}: ${error.message}`;
+
+	let fields: Partial<Record<(typeof DIAGNOSTIC_FIELDS)[number], string>>;
+	try {
+		fields = extractDiagnosticFields(error.body);
+	} catch {
+		return base;
+	}
+
+	const parts: string[] = [];
+	for (const field of DIAGNOSTIC_FIELDS) {
+		const value = fields[field];
+		if (value === undefined) continue;
+		const normalized = normalizeControlChars(redact(value, secrets)).slice(
+			0,
+			DIAGNOSTIC_FIELD_MAX_LENGTH,
+		);
+		if (normalized.length > 0) {
+			parts.push(`${field}=${normalized}`);
+		}
+	}
+
+	return parts.length > 0 ? `${base} | upstream ${parts.join(" ")}` : base;
+}
+
 function safeError(error: unknown, secrets: readonly string[]): string {
 	const raw =
-		error instanceof Error
-			? `${error.name}: ${error.message}`
-			: "Unknown contract failure.";
+		error instanceof ProviderError
+			? formatProviderErrorDiagnostics(error, secrets)
+			: error instanceof Error
+				? `${error.name}: ${error.message}`
+				: "Unknown contract failure.";
 	return redact(raw, secrets).slice(0, 1_000);
 }
 
