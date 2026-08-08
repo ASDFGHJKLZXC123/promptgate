@@ -200,10 +200,416 @@ describe("nightly live contract runner", () => {
 				expect(request).toEqual({
 					model: `${name}-contract-model`,
 					messages: [{ role: "user", content: "Reply with exactly OK." }],
-					max_tokens: 64,
+					...(name === "openai"
+						? { max_completion_tokens: 64 }
+						: { max_tokens: 64 }),
 				});
+				if (name === "openai") {
+					expect(request).not.toHaveProperty("max_tokens");
+				} else {
+					expect(request).not.toHaveProperty("max_completion_tokens");
+				}
 			}
 		}
+	});
+
+	test("runs one safe Gemini model-list diagnostic only for manual dispatch", async () => {
+		const observed = {
+			complete: [] as ChatRequest[],
+			stream: [] as ChatRequest[],
+		};
+		const reports: string[] = [];
+		const secret = "gemini-manual-secret";
+		let fetchCalls = 0;
+		const result = await runNightlyContracts({
+			environment: {
+				GEMINI_API_KEY: secret,
+				GITHUB_EVENT_NAME: "workflow_dispatch",
+			},
+			definitions: [fakeDefinition("gemini", {}, observed)],
+			report: (line) => reports.push(line),
+			createSignal: () => signal,
+			diagnosticFetch: async (input, init) => {
+				fetchCalls += 1;
+				expect(input).toBe(
+					"https://generativelanguage.googleapis.com/v1beta/openai/models",
+				);
+				expect(init.method).toBe("GET");
+				expect(init.redirect).toBe("error");
+				const headers = new Headers(init.headers);
+				expect(headers.get("accept")).toBe("application/json");
+				expect(headers.get("authorization")).toBe(`Bearer ${secret}`);
+				expect(init.body).toBeUndefined();
+				return new Response(
+					JSON.stringify({
+						object: "list",
+						data: [{ id: "another-model" }, { id: "gemini-contract-model" }],
+					}),
+					{ status: 200, headers: { "content-type": "application/json" } },
+				);
+			},
+		});
+
+		expect(fetchCalls).toBe(1);
+		expect(observed.complete).toHaveLength(1);
+		expect(observed.stream).toHaveLength(1);
+		expect(result.results[0]).toMatchObject({
+			status: "PASSED",
+			diagnostic: "http_status=200 model_count=2 target_present=true",
+		});
+		const rendered = `${reports.join("\n")}\n${renderContractSummary(result)}`;
+		expect(rendered).toContain("Gemini model-list diagnostic");
+		expect(rendered).toContain(
+			"http_status=200 model_count=2 target_present=true",
+		);
+		expect(rendered).toContain(
+			"do not substitute for scheduled contract evidence",
+		);
+		expect(rendered).not.toContain(secret);
+		expect(rendered).not.toContain("another-model");
+		expect(rendered).not.toContain("gemini-contract-model | http_status");
+	});
+
+	test("never runs the Gemini model-list diagnostic on a schedule event", async () => {
+		let fetchCalls = 0;
+		const result = await runNightlyContracts({
+			environment: {
+				GEMINI_API_KEY: "configured",
+				GITHUB_EVENT_NAME: "schedule",
+			},
+			definitions: [fakeDefinition("gemini")],
+			createSignal: () => signal,
+			diagnosticFetch: async () => {
+				fetchCalls += 1;
+				throw new Error("must not run");
+			},
+		});
+
+		expect(fetchCalls).toBe(0);
+		expect(result.results[0]).not.toHaveProperty("diagnostic");
+		expect(renderContractSummary(result)).not.toContain(
+			"Manual-dispatch diagnostics",
+		);
+	});
+
+	test("snapshots and validates hostile Gemini diagnostic response status once", async () => {
+		const leakedUrl = "https://status-leak.invalid";
+		const cases = [
+			{ kind: "throwing", expectedStatus: "unknown" },
+			{ kind: "arbitrary", expectedStatus: "unknown" },
+			{ kind: "changing", expectedStatus: "200" },
+		] as const;
+
+		for (const testCase of cases) {
+			let statusReads = 0;
+			const response = {
+				get status() {
+					statusReads += 1;
+					if (testCase.kind === "throwing") {
+						throw new Error(leakedUrl);
+					}
+					if (testCase.kind === "arbitrary") return leakedUrl;
+					return statusReads === 1 ? 200 : leakedUrl;
+				},
+				json: async () => ({ data: [{ id: "gemini-contract-model" }] }),
+			} as unknown as Response;
+			const reports: string[] = [];
+			const result = await runNightlyContracts({
+				environment: {
+					GEMINI_API_KEY: "configured",
+					GITHUB_EVENT_NAME: "workflow_dispatch",
+				},
+				definitions: [fakeDefinition("gemini")],
+				report: (line) => reports.push(line),
+				createSignal: () => signal,
+				diagnosticFetch: async () => response,
+			});
+
+			expect(statusReads).toBe(1);
+			expect(result).toMatchObject({
+				configuredCount: 1,
+				passedCount: 1,
+				failedCount: 0,
+				ok: true,
+			});
+			const first = result.results[0];
+			if (first === undefined || first.status === "SKIPPED") {
+				throw new Error("expected configured Gemini result");
+			}
+			expect(first.status).toBe("PASSED");
+			expect(first.diagnostic).toBe(
+				`http_status=${testCase.expectedStatus} model_count=1 target_present=true`,
+			);
+			const surfaces = `${JSON.stringify(result)}\n${reports.join("\n")}\n${renderContractSummary(result)}`;
+			expect(surfaces).not.toContain(leakedUrl);
+		}
+	});
+
+	test("snapshots and validates hostile Gemini model-list length once without suite interference", async () => {
+		const leakedUrl = "https://length-or-iteration-leak.invalid";
+		const cases = [
+			{
+				kind: "throwing-length",
+				expected: "model_count=unknown target_present=unknown",
+			},
+			{
+				kind: "arbitrary-length",
+				expected: "model_count=unknown target_present=unknown",
+			},
+			{
+				kind: "changing-length",
+				expected: "model_count=1 target_present=true",
+			},
+			{
+				kind: "throwing-iteration",
+				expected: "model_count=1 target_present=unknown",
+			},
+		] as const;
+
+		for (const testCase of cases) {
+			let lengthReads = 0;
+			const data = new Proxy([{ id: "gemini-contract-model" }], {
+				get(target, property, receiver) {
+					if (property === "length") {
+						lengthReads += 1;
+						if (testCase.kind === "throwing-length") {
+							throw new Error(leakedUrl);
+						}
+						if (testCase.kind === "arbitrary-length") return leakedUrl;
+						if (testCase.kind === "changing-length") {
+							return lengthReads === 1 ? 1 : leakedUrl;
+						}
+					}
+					return Reflect.get(target, property, receiver) as unknown;
+				},
+				ownKeys(target) {
+					if (testCase.kind === "throwing-iteration") {
+						throw new Error(leakedUrl);
+					}
+					return Reflect.ownKeys(target);
+				},
+			});
+			const reports: string[] = [];
+			const result = await runNightlyContracts({
+				environment: {
+					GEMINI_API_KEY: "configured",
+					GITHUB_EVENT_NAME: "workflow_dispatch",
+				},
+				definitions: [fakeDefinition("gemini")],
+				report: (line) => reports.push(line),
+				createSignal: () => signal,
+				diagnosticFetch: async () =>
+					({ status: 200, json: async () => ({ data }) }) as Response,
+			});
+
+			expect(lengthReads).toBe(1);
+			expect(result).toMatchObject({
+				configuredCount: 1,
+				passedCount: 1,
+				failedCount: 0,
+				ok: true,
+			});
+			const first = result.results[0];
+			if (first === undefined || first.status === "SKIPPED") {
+				throw new Error("expected configured Gemini result");
+			}
+			expect(first.status).toBe("PASSED");
+			expect(first.diagnostic).toBe(`http_status=200 ${testCase.expected}`);
+			const surfaces = `${JSON.stringify(result)}\n${reports.join("\n")}\n${renderContractSummary(result)}`;
+			expect(surfaces).not.toContain(leakedUrl);
+		}
+	});
+
+	test("contains a revoked Gemini model-list Array Proxy without suite interference", async () => {
+		const observed = {
+			complete: [] as ChatRequest[],
+			stream: [] as ChatRequest[],
+		};
+		const reports: string[] = [];
+		const { proxy, revoke } = Proxy.revocable(
+			[{ id: "gemini-contract-model" }],
+			{},
+		);
+		revoke();
+
+		const result = await runNightlyContracts({
+			environment: {
+				GEMINI_API_KEY: "configured",
+				GITHUB_EVENT_NAME: "workflow_dispatch",
+			},
+			definitions: [fakeDefinition("gemini", {}, observed)],
+			report: (line) => reports.push(line),
+			createSignal: () => signal,
+			diagnosticFetch: async () =>
+				({ status: 200, json: async () => ({ data: proxy }) }) as Response,
+		});
+
+		expect(observed.complete).toHaveLength(1);
+		expect(observed.stream).toHaveLength(1);
+		expect(result).toMatchObject({
+			configuredCount: 1,
+			passedCount: 1,
+			failedCount: 0,
+			skippedCount: 0,
+			ok: true,
+		});
+		const first = result.results[0];
+		if (first === undefined || first.status === "SKIPPED") {
+			throw new Error("expected configured Gemini result");
+		}
+		expect(first.status).toBe("PASSED");
+		expect(first.diagnostic).toBe(
+			"http_status=200 model_count=unknown target_present=unknown",
+		);
+		const surfaces = `${JSON.stringify(result)}\n${reports.join("\n")}\n${renderContractSummary(result)}`;
+		expect(surfaces).not.toContain("IsArray");
+		expect(surfaces).not.toContain("proxy that has been revoked");
+	});
+
+	test("reports an absent Gemini target without printing any model id", async () => {
+		const result = await runNightlyContracts({
+			environment: {
+				GEMINI_API_KEY: "configured",
+				GITHUB_EVENT_NAME: "workflow_dispatch",
+			},
+			definitions: [fakeDefinition("gemini")],
+			createSignal: () => signal,
+			diagnosticFetch: async () =>
+				new Response(
+					JSON.stringify({ data: [{ id: "sensitive-model-list-entry" }] }),
+					{ status: 200 },
+				),
+		});
+
+		const first = result.results[0];
+		expect(first).toMatchObject({
+			diagnostic: "http_status=200 model_count=1 target_present=false",
+		});
+		expect(JSON.stringify(first)).not.toContain("sensitive-model-list-entry");
+	});
+
+	test("allowlists and redacts Gemini model-list error fields", async () => {
+		const secret = "gemini-diagnostic-secret";
+		const result = await runNightlyContracts({
+			environment: {
+				GEMINI_API_KEY: secret,
+				GITHUB_EVENT_NAME: "workflow_dispatch",
+			},
+			definitions: [fakeDefinition("gemini")],
+			createSignal: () => signal,
+			diagnosticFetch: async () =>
+				new Response(
+					JSON.stringify({
+						error: {
+							code: 403,
+							status: "PERMISSION_DENIED",
+							message: `blocked key ${secret}`,
+							details: [{ reason: "must-not-print" }],
+						},
+					}),
+					{ status: 403 },
+				),
+		});
+
+		const first = result.results[0];
+		if (first === undefined || first.status === "SKIPPED") {
+			throw new Error("expected configured Gemini result");
+		}
+		expect(first.diagnostic).toContain(
+			"http_status=403 model_count=unknown target_present=unknown",
+		);
+		expect(first.diagnostic).toContain("code=403");
+		expect(first.diagnostic).toContain("status=PERMISSION_DENIED");
+		expect(first.diagnostic).toContain("message=blocked key [REDACTED]");
+		expect(first.diagnostic).not.toContain(secret);
+		expect(first.diagnostic).not.toContain("details");
+		expect(first.diagnostic).not.toContain("must-not-print");
+	});
+
+	test("handles non-JSON, cyclic, and hostile Gemini model-list bodies safely", async () => {
+		const cyclic: Record<string, unknown> = { message: "safe cyclic message" };
+		cyclic.data = cyclic;
+		cyclic.error = cyclic;
+		const hostile: Record<string, unknown> = {};
+		for (const field of ["data", "error"] as const) {
+			Object.defineProperty(hostile, field, {
+				get() {
+					throw new Error("hostile raw body must not print");
+				},
+			});
+		}
+		const cases: Array<{
+			response: Response;
+			expected: string;
+			forbidden?: string;
+		}> = [
+			{
+				response: new Response("raw not found body", { status: 404 }),
+				expected: "http_status=404 model_count=unknown target_present=unknown",
+				forbidden: "raw not found body",
+			},
+			{
+				response: {
+					status: 404,
+					json: async () => cyclic,
+				} as Response,
+				expected:
+					"http_status=404 model_count=unknown target_present=unknown upstream message=safe cyclic message",
+			},
+			{
+				response: {
+					status: 404,
+					json: async () => hostile,
+				} as Response,
+				expected: "http_status=404 model_count=unknown target_present=unknown",
+				forbidden: "hostile raw body must not print",
+			},
+		];
+
+		for (const testCase of cases) {
+			const result = await runNightlyContracts({
+				environment: {
+					GEMINI_API_KEY: "configured",
+					GITHUB_EVENT_NAME: "workflow_dispatch",
+				},
+				definitions: [fakeDefinition("gemini")],
+				createSignal: () => signal,
+				diagnosticFetch: async () => testCase.response,
+			});
+			const first = result.results[0];
+			if (first === undefined || first.status === "SKIPPED") {
+				throw new Error("expected configured Gemini result");
+			}
+			expect(first.diagnostic).toBe(testCase.expected);
+			if (testCase.forbidden !== undefined) {
+				expect(first.diagnostic).not.toContain(testCase.forbidden);
+			}
+		}
+	});
+
+	test("uses a fixed safe result when the Gemini diagnostic fetch rejects", async () => {
+		const secret = "gemini-rejected-fetch-secret";
+		const result = await runNightlyContracts({
+			environment: {
+				GEMINI_API_KEY: secret,
+				GITHUB_EVENT_NAME: "workflow_dispatch",
+			},
+			definitions: [fakeDefinition("gemini")],
+			createSignal: () => signal,
+			diagnosticFetch: async () => {
+				throw new Error(`raw rejection ${secret}`);
+			},
+		});
+
+		const first = result.results[0];
+		if (first === undefined || first.status === "SKIPPED") {
+			throw new Error("expected configured Gemini result");
+		}
+		expect(first.diagnostic).toBe(
+			"http_status=unavailable model_count=unknown target_present=unknown",
+		);
+		expect(first.diagnostic).not.toContain(secret);
+		expect(first.diagnostic).not.toContain("raw rejection");
 	});
 
 	test("names every missing credential as SKIPPED and rejects zero configured providers", async () => {
