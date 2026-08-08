@@ -10,11 +10,14 @@ import { createDeepSeekAdapter } from "../providers/deepseek.js";
 import { createGeminiAdapter } from "../providers/gemini.js";
 import { createOpenAiAdapter } from "../providers/openai.js";
 import { ProviderError } from "../providers/provider-error.js";
+import type { FetchLike } from "../providers/retry.js";
 import type { ProviderAdapter, ProviderName } from "../providers/types.js";
 
 const CONTRACT_MAX_TOKENS = 64;
 const CONTRACT_TIMEOUT_MS = 120_000;
 const CONTRACT_PROMPT = "Reply with exactly OK.";
+const GEMINI_MODEL_LIST_URL =
+	"https://generativelanguage.googleapis.com/v1beta/openai/models";
 
 export interface ContractProviderDefinition {
 	name: ProviderName;
@@ -76,6 +79,7 @@ export type ProviderContractResult =
 			displayName: string;
 			model: string;
 			status: "PASSED" | "FAILED";
+			diagnostic?: string;
 			nonStreaming: ContractModeResult;
 			streaming: ContractModeResult;
 	  };
@@ -94,13 +98,16 @@ export interface RunNightlyContractsOptions {
 	definitions?: readonly ContractProviderDefinition[];
 	report?: (line: string) => void;
 	createSignal?: () => AbortSignal;
+	diagnosticFetch?: FetchLike;
 }
 
-function buildRequest(model: string): ChatRequest {
+function buildRequest(provider: ProviderName, model: string): ChatRequest {
 	return ChatRequestSchema.parse({
 		model,
 		messages: [{ role: "user", content: CONTRACT_PROMPT }],
-		max_tokens: CONTRACT_MAX_TOKENS,
+		...(provider === "openai"
+			? { max_completion_tokens: CONTRACT_MAX_TOKENS }
+			: { max_tokens: CONTRACT_MAX_TOKENS }),
 	});
 }
 
@@ -167,6 +174,7 @@ const DIAGNOSTIC_FIELDS = [
 	"message",
 ] as const;
 const DIAGNOSTIC_FIELD_MAX_LENGTH = 200;
+const DIAGNOSTIC_TOTAL_MAX_LENGTH = 1_000;
 const MAX_CONTROL_CHAR_CODE = 31;
 const DELETE_CHAR_CODE = 127;
 const C1_CONTROL_MIN_CODE = 128;
@@ -227,22 +235,15 @@ function extractDiagnosticFields(
 	return fields;
 }
 
-/**
- * Formats only a fixed allowlist of scalar upstream fields (never arbitrary
- * body/details) for a ProviderError, so a nightly diagnostic can name the
- * exact upstream cause without ever echoing an unbounded or unknown payload.
- */
-function formatProviderErrorDiagnostics(
-	error: ProviderError,
+function formatUpstreamDiagnosticFields(
+	body: unknown,
 	secrets: readonly string[],
-): string {
-	const base = `${error.name}: ${error.message}`;
-
+): string[] {
 	let fields: Partial<Record<(typeof DIAGNOSTIC_FIELDS)[number], string>>;
 	try {
-		fields = extractDiagnosticFields(error.body);
+		fields = extractDiagnosticFields(body);
 	} catch {
-		return base;
+		return [];
 	}
 
 	const parts: string[] = [];
@@ -257,6 +258,20 @@ function formatProviderErrorDiagnostics(
 			parts.push(`${field}=${normalized}`);
 		}
 	}
+	return parts;
+}
+
+/**
+ * Formats only a fixed allowlist of scalar upstream fields (never arbitrary
+ * body/details) for a ProviderError, so a nightly diagnostic can name the
+ * exact upstream cause without ever echoing an unbounded or unknown payload.
+ */
+function formatProviderErrorDiagnostics(
+	error: ProviderError,
+	secrets: readonly string[],
+): string {
+	const base = `${error.name}: ${error.message}`;
+	const parts = formatUpstreamDiagnosticFields(error.body, secrets);
 
 	return parts.length > 0 ? `${base} | upstream ${parts.join(" ")}` : base;
 }
@@ -268,17 +283,131 @@ function safeError(error: unknown, secrets: readonly string[]): string {
 			: error instanceof Error
 				? `${error.name}: ${error.message}`
 				: "Unknown contract failure.";
-	return redact(raw, secrets).slice(0, 1_000);
+	return redact(raw, secrets).slice(0, DIAGNOSTIC_TOTAL_MAX_LENGTH);
+}
+
+function summarizeGeminiModelList(
+	body: unknown,
+	targetModel: string,
+): { modelCount?: number; targetPresent?: boolean } {
+	try {
+		const data =
+			typeof body === "object" && body !== null
+				? (body as Record<string, unknown>).data
+				: undefined;
+		if (!Array.isArray(data)) return {};
+
+		const lengthSnapshot: unknown = data.length;
+		if (
+			typeof lengthSnapshot !== "number" ||
+			!Number.isSafeInteger(lengthSnapshot) ||
+			lengthSnapshot < 0
+		) {
+			return {};
+		}
+		const modelCount = lengthSnapshot;
+
+		try {
+			for (const key of Object.keys(data)) {
+				const index = Number(key);
+				if (
+					!Number.isSafeInteger(index) ||
+					index < 0 ||
+					index >= modelCount ||
+					String(index) !== key
+				) {
+					continue;
+				}
+				const entry = data[index];
+				if (readScalarField(entry, "id") === targetModel) {
+					return { modelCount, targetPresent: true };
+				}
+			}
+			return { modelCount, targetPresent: false };
+		} catch {
+			return { modelCount };
+		}
+	} catch {
+		return {};
+	}
+}
+
+async function runGeminiModelListDiagnostic(
+	apiKey: string,
+	targetModel: string,
+	signal: AbortSignal,
+	fetch: FetchLike,
+	secrets: readonly string[],
+): Promise<string> {
+	let response: Response;
+	try {
+		response = await fetch(GEMINI_MODEL_LIST_URL, {
+			method: "GET",
+			redirect: "error",
+			headers: {
+				accept: "application/json",
+				authorization: `Bearer ${apiKey}`,
+			},
+			signal,
+		});
+	} catch {
+		return "http_status=unavailable model_count=unknown target_present=unknown";
+	}
+
+	let statusSnapshot: unknown;
+	try {
+		statusSnapshot = response.status;
+	} catch {
+		statusSnapshot = undefined;
+	}
+	const status =
+		typeof statusSnapshot === "number" &&
+		Number.isSafeInteger(statusSnapshot) &&
+		statusSnapshot >= 100 &&
+		statusSnapshot <= 599
+			? statusSnapshot
+			: undefined;
+
+	let body: unknown;
+	try {
+		body = await response.json();
+	} catch {
+		body = undefined;
+	}
+
+	let summary: { modelCount?: number; targetPresent?: boolean } = {};
+	try {
+		summary = summarizeGeminiModelList(body, targetModel);
+	} catch {
+		// Defense in depth: diagnostic metadata must never abort provider modes or
+		// alter nightly suite accounting, even if this summarizer later changes.
+		summary = {};
+	}
+	const parts = [
+		`http_status=${status ?? "unknown"}`,
+		`model_count=${summary.modelCount ?? "unknown"}`,
+		`target_present=${summary.targetPresent ?? "unknown"}`,
+	];
+	const upstream = formatUpstreamDiagnosticFields(body, secrets);
+	if (upstream.length > 0) {
+		parts.push(`upstream ${upstream.join(" ")}`);
+	}
+
+	return redact(parts.join(" "), secrets).slice(0, DIAGNOSTIC_TOTAL_MAX_LENGTH);
 }
 
 async function runNonStreaming(
 	adapter: ProviderAdapter,
+	provider: ProviderName,
 	model: string,
 	signal: AbortSignal,
 ): Promise<string> {
 	// Exactly one logical adapter invocation. The adapter's existing bounded
 	// transport retries remain intact underneath this call.
-	const response = await adapter.complete(buildRequest(model), signal);
+	const response = await adapter.complete(
+		buildRequest(provider, model),
+		signal,
+	);
 	const parsed = ChatResponseSchema.parse(response);
 	const visibleChoices = parsed.choices.filter(
 		(choice) =>
@@ -293,6 +422,7 @@ async function runNonStreaming(
 
 async function runStreaming(
 	adapter: ProviderAdapter,
+	provider: ProviderName,
 	model: string,
 	signal: AbortSignal,
 ): Promise<string> {
@@ -303,7 +433,7 @@ async function runStreaming(
 
 	// Exactly one logical adapter invocation. Consuming this one iterable lets
 	// the adapter preserve its own bounded pre-stream retry behavior.
-	const stream = adapter.stream(buildRequest(model), signal);
+	const stream = adapter.stream(buildRequest(provider, model), signal);
 	for await (const frame of stream) {
 		if (sawDone) {
 			throw new Error("Streaming adapter emitted a frame after [DONE].");
@@ -373,8 +503,11 @@ export async function runNightlyContracts({
 	definitions = CONTRACT_PROVIDER_DEFINITIONS,
 	report = () => {},
 	createSignal = () => AbortSignal.timeout(CONTRACT_TIMEOUT_MS),
+	diagnosticFetch = (input, init) => globalThis.fetch(input, init),
 }: RunNightlyContractsOptions): Promise<ContractSuiteResult> {
 	const results: ProviderContractResult[] = [];
+	const shouldRunGeminiModelListDiagnostic =
+		environment.GITHUB_EVENT_NAME === "workflow_dispatch";
 	const configuredSecrets = definitions
 		.map((definition) => environment[definition.credentialEnv])
 		.filter(
@@ -396,6 +529,18 @@ export async function runNightlyContracts({
 			continue;
 		}
 
+		let diagnostic: string | undefined;
+		if (shouldRunGeminiModelListDiagnostic && definition.name === "gemini") {
+			diagnostic = await runGeminiModelListDiagnostic(
+				apiKey,
+				definition.model,
+				createSignal(),
+				diagnosticFetch,
+				configuredSecrets,
+			);
+			report(`Gemini model-list diagnostic: ${diagnostic}`);
+		}
+
 		let adapter: ProviderAdapter;
 		try {
 			adapter = definition.createAdapter(apiKey);
@@ -414,13 +559,20 @@ export async function runNightlyContracts({
 				displayName: definition.displayName,
 				model: definition.model,
 				status: "FAILED",
+				...(diagnostic === undefined ? {} : { diagnostic }),
 				nonStreaming,
 				streaming,
 			});
 			continue;
 		}
 		const nonStreaming = await captureMode(
-			() => runNonStreaming(adapter, definition.model, createSignal()),
+			() =>
+				runNonStreaming(
+					adapter,
+					definition.name,
+					definition.model,
+					createSignal(),
+				),
 			configuredSecrets,
 		);
 		report(
@@ -430,7 +582,13 @@ export async function runNightlyContracts({
 		// A non-streaming failure does not suppress the one required streaming
 		// invocation; both contract surfaces are independently reported.
 		const streaming = await captureMode(
-			() => runStreaming(adapter, definition.model, createSignal()),
+			() =>
+				runStreaming(
+					adapter,
+					definition.name,
+					definition.model,
+					createSignal(),
+				),
 			configuredSecrets,
 		);
 		report(
@@ -445,6 +603,7 @@ export async function runNightlyContracts({
 				nonStreaming.status === "PASSED" && streaming.status === "PASSED"
 					? "PASSED"
 					: "FAILED",
+			...(diagnostic === undefined ? {} : { diagnostic }),
 			nonStreaming,
 			streaming,
 		});
@@ -500,6 +659,32 @@ export function renderContractSummary(result: ContractSuiteResult): string {
 		lines.push(
 			`| ${provider.displayName} | \`${provider.model}\` | ${modeCell(provider.nonStreaming)} | ${modeCell(provider.streaming)} | ${provider.status} |`,
 		);
+	}
+
+	const diagnostics = result.results.filter(
+		(
+			provider,
+		): provider is Extract<
+			ProviderContractResult,
+			{ status: "PASSED" | "FAILED" }
+		> & { diagnostic: string } =>
+			provider.status !== "SKIPPED" && provider.diagnostic !== undefined,
+	);
+	if (diagnostics.length > 0) {
+		lines.push(
+			"",
+			"### Manual-dispatch diagnostics",
+			"",
+			"These no-generation diagnostics do not substitute for scheduled contract evidence or change provider pass/fail status.",
+			"",
+			"| Provider | Model-list result |",
+			"|---|---|",
+		);
+		for (const provider of diagnostics) {
+			lines.push(
+				`| ${provider.displayName} | ${escapeTableCell(provider.diagnostic)} |`,
+			);
+		}
 	}
 
 	lines.push(
