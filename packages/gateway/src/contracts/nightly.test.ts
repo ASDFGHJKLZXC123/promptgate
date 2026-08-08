@@ -1,6 +1,7 @@
 import type { ChatRequest, ChatResponse } from "@promptgate/shared";
 import { describe, expect, test } from "vitest";
 
+import { ProviderError } from "../providers/provider-error.js";
 import type {
 	ProviderAdapter,
 	ProviderName,
@@ -9,9 +10,19 @@ import type {
 import {
 	CONTRACT_PROVIDER_DEFINITIONS,
 	type ContractProviderDefinition,
+	type ContractSuiteResult,
 	renderContractSummary,
 	runNightlyContracts,
 } from "./nightly.js";
+
+function detailOf(
+	suite: ContractSuiteResult,
+	mode: "nonStreaming" | "streaming" = "nonStreaming",
+): string {
+	const first = suite.results[0];
+	if (first === undefined || first.status === "SKIPPED") return "";
+	return first[mode].detail;
+}
 
 const signal = new AbortController().signal;
 
@@ -488,5 +499,418 @@ describe("nightly live contract runner", () => {
 				detail: expect.stringContaining("without [DONE]"),
 			},
 		});
+	});
+});
+
+describe("nightly ProviderError diagnostic formatting", () => {
+	test("extracts allowlisted fields from an OpenAI-shaped error envelope nested under error", async () => {
+		const body = {
+			error: {
+				message:
+					"The model gpt-5.6-luna does not exist or you do not have access to it.",
+				type: "invalid_request_error",
+				param: "model",
+				code: "model_not_found",
+			},
+		};
+		const result = await runNightlyContracts({
+			environment: { OPENAI_API_KEY: "configured" },
+			definitions: [
+				fakeDefinition("openai", {
+					completeError: new ProviderError(
+						"openai",
+						400,
+						body,
+						"OpenAI request failed with status 400.",
+					),
+				}),
+			],
+			createSignal: () => signal,
+		});
+
+		const detail = detailOf(result);
+		expect(detail).toContain("type=invalid_request_error");
+		expect(detail).toContain("code=model_not_found");
+		expect(detail).toContain("param=model");
+		expect(detail).toContain(
+			"message=The model gpt-5.6-luna does not exist or you do not have access to it.",
+		);
+	});
+
+	test("prefers the nested Anthropic error.type over the generic top-level type discriminator", async () => {
+		const body = {
+			type: "error",
+			error: {
+				type: "invalid_request_error",
+				message: "messages.0.content: Input should be a valid string.",
+			},
+		};
+		const result = await runNightlyContracts({
+			environment: { ANTHROPIC_API_KEY: "configured" },
+			definitions: [
+				fakeDefinition("anthropic", {
+					completeError: new ProviderError(
+						"anthropic",
+						400,
+						body,
+						"Anthropic request failed with status 400.",
+					),
+				}),
+			],
+			createSignal: () => signal,
+		});
+
+		const detail = detailOf(result);
+		expect(detail).toContain("type=invalid_request_error");
+		expect(detail).not.toContain("type=error");
+		expect(detail).toContain(
+			"message=messages.0.content: Input should be a valid string.",
+		);
+	});
+
+	test("extracts a numeric code and string status from a Google/Gemini-shaped error envelope", async () => {
+		const body = {
+			error: {
+				code: 404,
+				message: "models/gemini-2.5-flash is not found for API version v1beta.",
+				status: "NOT_FOUND",
+			},
+		};
+		const result = await runNightlyContracts({
+			environment: { GEMINI_API_KEY: "configured" },
+			definitions: [
+				fakeDefinition("gemini", {
+					completeError: new ProviderError(
+						"gemini",
+						404,
+						body,
+						"Gemini request failed with status 404.",
+					),
+				}),
+			],
+			createSignal: () => signal,
+		});
+
+		const detail = detailOf(result);
+		expect(detail).toContain("code=404");
+		expect(detail).toContain("status=NOT_FOUND");
+		expect(detail).toContain(
+			"message=models/gemini-2.5-flash is not found for API version v1beta.",
+		);
+	});
+
+	test("prefers nested body.error fields over same-named top-level body fields", async () => {
+		const body = {
+			message: "top-level-message",
+			type: "top-level-type",
+			error: {
+				message: "nested-message",
+				type: "nested-type",
+			},
+		};
+		const result = await runNightlyContracts({
+			environment: { OPENAI_API_KEY: "configured" },
+			definitions: [
+				fakeDefinition("openai", {
+					completeError: new ProviderError("openai", 400, body, "failed."),
+				}),
+			],
+			createSignal: () => signal,
+		});
+
+		const detail = detailOf(result);
+		expect(detail).toContain("type=nested-type");
+		expect(detail).toContain("message=nested-message");
+		expect(detail).not.toContain("top-level-message");
+		expect(detail).not.toContain("top-level-type");
+	});
+
+	test("falls back to top-level body fields when no nested error object is present", async () => {
+		const body = { code: "TIMEOUT", message: "Upstream timed out." };
+		const result = await runNightlyContracts({
+			environment: { OPENAI_API_KEY: "configured" },
+			definitions: [
+				fakeDefinition("openai", {
+					completeError: new ProviderError("openai", 504, body, "failed."),
+				}),
+			],
+			createSignal: () => signal,
+		});
+
+		const detail = detailOf(result);
+		expect(detail).toContain("code=TIMEOUT");
+		expect(detail).toContain("message=Upstream timed out.");
+	});
+
+	test("captures the same diagnostic fields for a streaming-mode ProviderError", async () => {
+		const body = {
+			error: { type: "invalid_request_error", message: "bad request" },
+		};
+		const result = await runNightlyContracts({
+			environment: { OPENAI_API_KEY: "configured" },
+			definitions: [
+				fakeDefinition("openai", {
+					streamError: new ProviderError("openai", 400, body, "failed."),
+				}),
+			],
+			createSignal: () => signal,
+		});
+
+		const detail = detailOf(result, "streaming");
+		expect(detail).toContain("type=invalid_request_error");
+		expect(detail).toContain("message=bad request");
+	});
+
+	test("redacts every configured provider secret from diagnostic fields", async () => {
+		const secret = "sk-must-not-appear-1234567890";
+		const body = {
+			error: {
+				message: `Invalid API key: ${secret}`,
+				type: "authentication_error",
+			},
+		};
+		const result = await runNightlyContracts({
+			environment: { OPENAI_API_KEY: secret },
+			definitions: [
+				fakeDefinition("openai", {
+					completeError: new ProviderError("openai", 401, body, "failed."),
+				}),
+			],
+			createSignal: () => signal,
+		});
+
+		const detail = detailOf(result);
+		expect(detail).toContain("type=authentication_error");
+		expect(detail).toContain("[REDACTED]");
+		expect(detail).not.toContain(secret);
+	});
+
+	test("redacts a longer configured secret without leaking the suffix past a shorter contained secret", async () => {
+		const shorterSecret = "sk-overlap";
+		const longerSecret = "sk-overlap-extended";
+		const body = {
+			error: {
+				message: `upstream message: ${longerSecret}`,
+				type: "authentication_error",
+			},
+		};
+		const result = await runNightlyContracts({
+			environment: {
+				OPENAI_API_KEY: shorterSecret,
+				ANTHROPIC_API_KEY: longerSecret,
+			},
+			definitions: [
+				fakeDefinition("openai", {
+					completeError: new ProviderError("openai", 401, body, "failed."),
+				}),
+				fakeDefinition("anthropic"),
+			],
+			createSignal: () => signal,
+		});
+
+		const detail = detailOf(result);
+		expect(detail).toContain("[REDACTED]");
+		expect(detail).not.toContain(longerSecret);
+		expect(detail).not.toContain(shorterSecret);
+		expect(detail).not.toContain("-extended");
+	});
+
+	test("merges arbitrary overlapping configured secrets into one redaction with no fragment surviving", async () => {
+		const secretA = "abc123def";
+		const secretB = "123def456";
+		const body = {
+			error: {
+				message: "session token abc123def456 leaked",
+				type: "authentication_error",
+			},
+		};
+		const result = await runNightlyContracts({
+			environment: {
+				OPENAI_API_KEY: secretA,
+				GEMINI_API_KEY: secretB,
+			},
+			definitions: [
+				fakeDefinition("openai", {
+					completeError: new ProviderError("openai", 401, body, "failed."),
+				}),
+				fakeDefinition("gemini"),
+			],
+			createSignal: () => signal,
+		});
+
+		const detail = detailOf(result);
+		expect(detail).toContain("[REDACTED]");
+		expect(detail).not.toContain(secretA);
+		expect(detail).not.toContain(secretB);
+		expect(detail).not.toContain("abc123");
+		expect(detail).not.toContain("def456");
+	});
+
+	test("omits fields outside the fixed allowlist and drops a literal null param", async () => {
+		const body = {
+			error: {
+				message: "bad",
+				type: "invalid_request_error",
+				param: null,
+				details: [{ big: "object", nested: { a: 1 } }],
+				stack: "at foo (bar.js:1:1)",
+				requestId: "abc-123",
+			},
+		};
+		const result = await runNightlyContracts({
+			environment: { OPENAI_API_KEY: "configured" },
+			definitions: [
+				fakeDefinition("openai", {
+					completeError: new ProviderError("openai", 400, body, "failed."),
+				}),
+			],
+			createSignal: () => signal,
+		});
+
+		const detail = detailOf(result);
+		expect(detail).toContain("type=invalid_request_error");
+		expect(detail).toContain("message=bad");
+		expect(detail).not.toContain("param=");
+		expect(detail).not.toContain("details");
+		expect(detail).not.toContain("stack");
+		expect(detail).not.toContain("requestId");
+		expect(detail).not.toContain("abc-123");
+		expect(detail).not.toContain("bar.js");
+	});
+
+	test("normalizes embedded control characters and line breaks in diagnostic fields", async () => {
+		const body = {
+			error: {
+				message: "Line one\nLine two\tTabbed\r\nWindows",
+				type: "invalid_request_error",
+			},
+		};
+		const result = await runNightlyContracts({
+			environment: { OPENAI_API_KEY: "configured" },
+			definitions: [
+				fakeDefinition("openai", {
+					completeError: new ProviderError("openai", 400, body, "failed."),
+				}),
+			],
+			createSignal: () => signal,
+		});
+
+		const detail = detailOf(result);
+		expect(/[\n\r\t]/.test(detail)).toBe(false);
+		expect(detail).toContain("message=Line one Line two Tabbed Windows");
+	});
+
+	test("normalizes the full C1 control range (U+0080-U+009F) without embedding raw control bytes in source", async () => {
+		const c1RangeStart = 128;
+		const c1RangeEnd = 159;
+		const c1Chars = Array.from(
+			{ length: c1RangeEnd - c1RangeStart + 1 },
+			(_, i) => String.fromCharCode(c1RangeStart + i),
+		);
+		const body = {
+			error: {
+				message: `left${c1Chars.join("")}right`,
+				type: "invalid_request_error",
+			},
+		};
+		const result = await runNightlyContracts({
+			environment: { OPENAI_API_KEY: "configured" },
+			definitions: [
+				fakeDefinition("openai", {
+					completeError: new ProviderError("openai", 400, body, "failed."),
+				}),
+			],
+			createSignal: () => signal,
+		});
+
+		const detail = detailOf(result);
+		expect(detail).toContain("message=left right");
+		for (const char of c1Chars) {
+			expect(detail.includes(char)).toBe(false);
+		}
+	});
+
+	test("bounds an oversized field and the total diagnostic message", async () => {
+		const hugeMessage = "a".repeat(5_000);
+		const body = {
+			error: { message: hugeMessage, type: "invalid_request_error" },
+		};
+		const result = await runNightlyContracts({
+			environment: { OPENAI_API_KEY: "configured" },
+			definitions: [
+				fakeDefinition("openai", {
+					completeError: new ProviderError("openai", 400, body, "failed."),
+				}),
+			],
+			createSignal: () => signal,
+		});
+
+		const detail = detailOf(result);
+		expect(detail.length).toBeLessThanOrEqual(1_000);
+		expect(detail).toContain("type=invalid_request_error");
+		expect(detail).not.toContain("a".repeat(300));
+	});
+
+	test("handles string, number, boolean, and null bodies without throwing", async () => {
+		for (const primitiveBody of ["Bad Request", 42, true, null]) {
+			const result = await runNightlyContracts({
+				environment: { OPENAI_API_KEY: "configured" },
+				definitions: [
+					fakeDefinition("openai", {
+						completeError: new ProviderError(
+							"openai",
+							400,
+							primitiveBody,
+							"OpenAI request failed with status 400.",
+						),
+					}),
+				],
+				createSignal: () => signal,
+			});
+
+			const detail = detailOf(result);
+			expect(detail).toBe(
+				"ProviderError: OpenAI request failed with status 400.",
+			);
+		}
+	});
+
+	test("handles a cyclic body by reading the one available scalar field without infinite recursion", async () => {
+		const body: Record<string, unknown> = { message: "cyclic base" };
+		body.error = body;
+		const result = await runNightlyContracts({
+			environment: { OPENAI_API_KEY: "configured" },
+			definitions: [
+				fakeDefinition("openai", {
+					completeError: new ProviderError("openai", 400, body, "failed."),
+				}),
+			],
+			createSignal: () => signal,
+		});
+
+		const detail = detailOf(result);
+		expect(detail).toContain("message=cyclic base");
+	});
+
+	test("falls back to the base message when reading the body throws", async () => {
+		const body: Record<string, unknown> = {};
+		Object.defineProperty(body, "error", {
+			enumerable: true,
+			get() {
+				throw new Error("hostile getter");
+			},
+		});
+		const result = await runNightlyContracts({
+			environment: { OPENAI_API_KEY: "configured" },
+			definitions: [
+				fakeDefinition("openai", {
+					completeError: new ProviderError("openai", 400, body, "failed."),
+				}),
+			],
+			createSignal: () => signal,
+		});
+
+		const detail = detailOf(result);
+		expect(detail).toBe("ProviderError: failed.");
 	});
 });
