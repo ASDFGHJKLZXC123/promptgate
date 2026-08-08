@@ -7,9 +7,9 @@ per-request cost and latency metering, exact-match caching, per-key budgets and
 rate limits, an immutable prompt registry, a regression-evaluation harness,
 and a built-in operations dashboard.
 
-Phase 8 closeout is in progress. The seven-day dogfood observation and closing
-analysis are complete; the required green **schedule-triggered** provider
-contract run, exact merged deployment verification, and final owner approval
+Phase 8 closeout is in progress. The seven-day dogfood observation, closing
+analysis, and required green **schedule-triggered** provider contract run are
+complete; exact final-merge deployment verification and final owner approval
 remain.
 
 ## Quick start
@@ -147,9 +147,14 @@ validates the response/chunk contract. A missing credential is reported as a
 named `SKIPPED` result, a configured provider failure makes the workflow red,
 and zero configured providers also makes it red.
 
-> **Schedule-triggered run evidence: pending.** Replace this notice with the
-> exact green GitHub Actions run URL after the workflow is merged to the default
-> branch and a scheduled event succeeds. A manual dispatch is not a substitute.
+> **Schedule-triggered run evidence:** [run
+> `31251691537`](https://github.com/ASDFGHJKLZXC123/promptgate/actions/runs/31251691537)
+> succeeded on 2026-08-08 for exact default-branch commit
+> `120dfb75be4405f5ba295a79485bddcaf0ef2155`. OpenAI/Luna and DeepSeek/V4
+> Flash each passed both live modes. Anthropic/Sonnet and Gemini/Flash were
+> named `SKIPPED` because their credentials were unconfigured, so neither was
+> live-verified in this qualifying run. Totals: 2 configured, 2 passed, 0
+> failed, and 2 skipped.
 
 ## Security and retention boundaries
 
@@ -173,7 +178,7 @@ evidence. The project idea file remains unchanged.
 
 | # | Deliverable | Evidence |
 |---:|---|---|
-| 1 | Four-provider gateway with metering, caching, and per-key budgets | [Four-provider evidence](docs/evidence/phase-2.md), [cache/budget evidence](docs/evidence/phase-3.md), [nightly workflow](.github/workflows/contract-nightly.yml), [provider completion commit](https://github.com/ASDFGHJKLZXC123/promptgate/commit/155d56792e8fa3d16ab91c3b5c8aacb71605fa73), [limits completion commit](https://github.com/ASDFGHJKLZXC123/promptgate/commit/76ff0404c406be23ee6f0183fc0ac6f7d3f65950) |
+| 1 | Four-provider gateway with metering, caching, and per-key budgets | [Four-provider evidence](docs/evidence/phase-2.md), [cache/budget evidence](docs/evidence/phase-3.md), [nightly workflow](.github/workflows/contract-nightly.yml), [green scheduled contract run](https://github.com/ASDFGHJKLZXC123/promptgate/actions/runs/31251691537), [provider completion commit](https://github.com/ASDFGHJKLZXC123/promptgate/commit/155d56792e8fa3d16ab91c3b5c8aacb71605fa73), [limits completion commit](https://github.com/ASDFGHJKLZXC123/promptgate/commit/76ff0404c406be23ee6f0183fc0ac6f7d3f65950) |
 | 2 | Prompt registry with immutable history and diff/rollback | [Phase 4 evidence](docs/evidence/phase-4.md), [live dogfood rollback](docs/evidence/phase-8.md#confirmed-rollback-and-next-call--prod--v1), [registry completion commit](https://github.com/ASDFGHJKLZXC123/promptgate/commit/bd2a4de84d57628485a21ed72ff88c224dbfe1f1), [Phase 8 rollback commit](https://github.com/ASDFGHJKLZXC123/promptgate/commit/6c8ab5b73ee176020c56dd600b28b0f2e42ffdf5) |
 | 3 | Eval harness, one golden dataset, and CI regression gate | [Eval evidence](docs/evidence/phase-5.md), [golden dataset](packages/evals/datasets/safety_screening.yaml), [CI evidence](docs/evidence/phase-6.md), [`eval-gate.yml`](.github/workflows/eval-gate.yml), [eval completion commit](https://github.com/ASDFGHJKLZXC123/promptgate/commit/a19468c37f1e24d2fe52c3dc298887305b8b2d6b), [CI workflow commit](https://github.com/ASDFGHJKLZXC123/promptgate/commit/0461418b1e7d85afd0c2c19abb66a676d474dded) |
 | 4 | Cost and quality-drift dashboard | [Overview screenshot](docs/evidence/phase-8/overview.png), [Quality Drift screenshot](docs/evidence/phase-8/quality-drift.png), [Phase 7 evidence](docs/evidence/phase-7.md), [dashboard completion commit](https://github.com/ASDFGHJKLZXC123/promptgate/commit/408c65552378c6d18d7d9905437b2f30ff7fc629) |

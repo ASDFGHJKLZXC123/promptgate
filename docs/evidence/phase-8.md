@@ -2,11 +2,11 @@
 
 Date started: 2026-07-30
 
-Status: **in progress — steps 1–5 are complete; step 6 implementation is
-offline-green and independently approved, with the required first green
-schedule-triggered run still pending publication to the default branch; the
-seven-day window passed with registry-backed traffic on all seven days and
-successful qualifying traffic on six**.
+Status: **in progress — steps 1–6 and the required first green
+schedule-triggered run are complete; the seven-day window passed with
+registry-backed traffic on all seven days and successful qualifying traffic on
+six; exact final-merge deployment verification, the literal final Verify, and
+owner approval remain**.
 
 ## Step 1 — persistent deployment and dogfood key
 
@@ -1353,8 +1353,8 @@ micro-USD ledger spend, and six successful prompt-ID-4/version-1 rows; the
 registry and `prod = v1` label were untouched.
 
 The screenshots and latency sample complete the measurement portion of step 5.
-The README case-study rendering, nightly contract evidence, exact merged
-deployment, and literal final Verify still remain.
+The README case-study rendering and nightly contract evidence are now complete.
+Exact final-merge deployment verification and the literal final Verify remain.
 
 A fresh independent read-only closing-analysis audit returned `APPROVE`. It
 recomputed both rank-19 p95s and the signed delta, verified the canonical body
@@ -1424,7 +1424,33 @@ counts, schemas/content/terminal rules, model pins, skip/failure policies,
 secret handling, action pins, permissions, workflow shape, build, and tests.
 No live provider request ran during implementation or audit.
 
-Implementation alone does not satisfy final Verify. The workflow must first be
-merged to the default branch and retain an actually green `schedule` event;
-manual dispatch cannot substitute for that evidence. The README contains a
-clearly marked pending run link until that event exists.
+Protected PR #15 published the provider-contract repair and merged as
+`120dfb75be4405f5ba295a79485bddcaf0ef2155`. The owner then deliberately
+removed the Anthropic and Gemini credentials after the diagnostic evidence
+showed that the Anthropic account lacked API credit and the Gemini credential's
+project catalog did not contain the pinned model. No credential was replaced or
+recreated.
+
+The first later qualifying run was [GitHub Actions run
+`31251691537`](https://github.com/ASDFGHJKLZXC123/promptgate/actions/runs/31251691537).
+It was triggered by the exact `schedule` event on protected `master` at
+`120dfb75be4405f5ba295a79485bddcaf0ef2155`, started at
+`2026-08-08T09:56:49Z`, completed successfully at `2026-08-08T09:57:22Z`, and
+reported the complete matrix:
+
+| Provider | Pinned model | Non-streaming | Streaming | Result |
+|---|---|---|---|---|
+| OpenAI | `gpt-5.6-luna` | `PASSED` — one validated choice with visible text | `PASSED` — four validated chunks and exactly one terminal usage chunk | `PASSED` |
+| Anthropic | `claude-sonnet-5` | `SKIPPED` | `SKIPPED` | `SKIPPED` — `ANTHROPIC_API_KEY` unconfigured |
+| Gemini | `gemini-2.5-flash` | `SKIPPED` | `SKIPPED` | `SKIPPED` — `GEMINI_API_KEY` unconfigured |
+| DeepSeek | `deepseek-v4-flash` | `PASSED` — one validated choice with visible text | `PASSED` — 27 validated chunks and exactly one terminal usage chunk | `PASSED` |
+
+The exact totals were **2 configured, 2 passed, 0 failed, and 2 skipped**.
+OpenAI/Luna and DeepSeek/V4 Flash therefore proved both live modes in the
+qualifying schedule. Anthropic/Sonnet and Gemini/Flash were named skips under
+the approved policy and were **not live-verified in this qualifying schedule**.
+A manual dispatch did not substitute for this evidence.
+
+This scheduled result completes step 6 but does not by itself satisfy final
+Verify. Exact final-merge redeployment, the remaining literal Verify checks,
+the final independent audit, and owner approval remain.
